@@ -23,6 +23,12 @@ dependencies = [
     "torch (>=2.6.0,<3.0.0)",
     "transformers[torch] (>=4.49.0,<5.0.0)",
     "scikit-learn (>=1.6.1,<2.0.0)",
+    "torchvision (>=0.21.0,<0.22.0)",
+    "torchaudio (>=2.6.0,<3.0.0)",
+    "datasets (>=3.3.2,<4.0.0)",
+    "evaluate (>=0.4.3,<0.5.0)",
+    "opentsne (>=1.0.2,<2.0.0)",
+    "deepspeed (>=0.16.4,<0.17.0)",
 ]
 
 
@@ -39,6 +45,12 @@ name = "pytorch_cpu"
 url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
 
+[[tool.poetry.source]]
+name = "pytorch_cuda"
+url = "https://download.pytorch.org/whl/cu126"
+priority = "explicit"
 
 [tool.poetry.dependencies]
-torch = {source = "pytorch_cpu"}
+torch = {source = "pytorch_cuda"}
+torchvision = {source = "pytorch_cuda"}
+torchaudio = {source = "pytorch_cuda"}

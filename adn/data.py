@@ -47,7 +47,7 @@ def load_datasets(
     data_ratio_to_use: float = 1.0,
 ):
     metadata = load_metadata(metadata_path).set_index("individual")
-    metadata = metadata.sample(frac=data_ratio_to_use)
+    metadata = metadata.sample(frac=data_ratio_to_use, random_state=42)
     individuals = metadata.index.to_list()
     dataframes = load_dataframes(individuals_snp_dir, individuals)
     max_position = compute_max_position(dataframes)
@@ -58,12 +58,18 @@ def load_datasets(
         random_state=42,
         stratify=metadata["GroupK4"],
     )
-    
-    label_to_id = {label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())}
+
+    label_to_id = {
+        label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())
+    }
     dna_tokenizer = get_tokenizer()
-    
-    train_dataframes = {individual: dataframes[individual] for individual in train_metadata.index}
-    test_dataframes = {individual: dataframes[individual] for individual in test_metadata.index}
+
+    train_dataframes = {
+        individual: dataframes[individual] for individual in train_metadata.index
+    }
+    test_dataframes = {
+        individual: dataframes[individual] for individual in test_metadata.index
+    }
     train_dataset = DNADataset(
         metadata_df=train_metadata,
         dataframes=train_dataframes,
@@ -73,7 +79,7 @@ def load_datasets(
         label_to_id=label_to_id,
         tokenizer=dna_tokenizer,
     )
-    
+
     test_dataset = DNADataset(
         metadata_df=test_metadata,
         dataframes=test_dataframes,
@@ -83,7 +89,7 @@ def load_datasets(
         label_to_id=label_to_id,
         tokenizer=dna_tokenizer,
     )
-    
+
     return train_dataset, test_dataset
 
 
@@ -109,8 +115,6 @@ class DNADataset(Dataset):
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
         logger.info(f"Loaded {len(self.individuals)} individuals")
-        
-        
 
     def __len__(self):
         return len(self.individuals) * self.sequence_per_individual
@@ -119,12 +123,23 @@ class DNADataset(Dataset):
         individual = np.random.choice(list(self.individuals))
         df = self.dataframes[individual]
         snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
+
+        sub_df = df[snp_idx : snp_idx + self.sequence_length]
         
-        sequence = df[snp_idx : snp_idx + self.sequence_length]
-        sequence = sequence[["main_allele", "allele"]].map_rows(lambda x: "".join(x)).to_numpy().squeeze().tolist()
-        sequence = ' '.join(sequence)
+        sequence_position = sub_df["position"].to_numpy().astype(np.float32)
+        sequence_position = (sequence_position / self.max_position).tolist()
+        sequence_position = [sequence_position[0]] + sequence_position + [sequence_position[-1]]
+        
+        sequence = (
+            sub_df[["main_allele", "allele"]]
+            .map_rows(lambda x: "".join(x))
+            .to_numpy()
+            .squeeze()
+            .tolist()
+        )
+        sequence = " ".join(sequence)
         sequence = self.tokenizer.encode(sequence)
-        
+
         label = self.metadata_df.loc[individual, "GroupK4"]
         label_id = self.label_to_id[label]
-        return sequence, label_id
+        return sequence, label_id, sequence_position
