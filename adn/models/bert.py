@@ -73,9 +73,15 @@ class CustomBertEmbeddings(BertEmbeddings):
 
 
 class CustomBertForSequenceClassification(BertForSequenceClassification):
-    def __init__(self, config):
+    def __init__(self, config, class_weights=None):
         super().__init__(config)
         self.custom_embed = CustomBertEmbeddings(config)
+
+        # Convert class_weights to tensor if provided
+        if class_weights is not None:
+            self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
+        else:
+            self.class_weights = None
 
     def embed(
         self,
@@ -131,7 +137,7 @@ class CustomBertForSequenceClassification(BertForSequenceClassification):
             chromosome_positions=chromosome_positions,
         )
 
-        return super().forward(
+        outputs = super().forward(
             input_ids=None,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -143,3 +149,11 @@ class CustomBertForSequenceClassification(BertForSequenceClassification):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
+        if labels is not None and self.class_weights is not None:
+            loss_fct = nn.CrossEntropyLoss(weight=self.class_weights.to(labels.device))
+            logits = outputs.logits
+            loss = loss_fct(logits, labels)
+            outputs.loss = loss  # Replace original loss
+
+        return outputs

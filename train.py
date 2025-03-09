@@ -3,7 +3,7 @@ import click
 from pathlib import Path
 import torch
 import numpy as np
-from adn.data import load_datasets
+from adn.data import data_collator, load_datasets
 from adn.plots import plot_trainer_logs, plot_tsne
 from adn.tokenizer import get_tokenizer
 from adn.models.bert import CustomBertForSequenceClassification
@@ -60,6 +60,10 @@ def train_model(
     batch_size,
     learning_rate,
 ):
+
+    output_dir = Path(output_dir) / run_name
+    assert not output_dir.exists(), f"Output directory {output_dir} already exists."
+
     train_ds, eval_ds = load_datasets(
         individuals_snp_dir=Path(individuals_snp_dir),
         metadata_path=Path(metadata_path),
@@ -67,6 +71,7 @@ def train_model(
         sequence_length=sequence_length,
         train_eval_split=train_eval_split,
         data_ratio_to_use=1,
+        mode="random",
     )
 
     dim = 256
@@ -79,10 +84,9 @@ def train_model(
         position_embedding_type="absolute",
     )
 
-    model = CustomBertForSequenceClassification(config)
-
-    output_dir = Path(output_dir) / run_name
-    assert not output_dir.exists(), f"Output directory {output_dir} already exists."
+    model = CustomBertForSequenceClassification(
+        config, class_weights=train_ds.class_weights
+    )
 
     training_args = TrainingArguments(
         output_dir=output_dir / "checkpoints",
@@ -100,19 +104,8 @@ def train_model(
         dataloader_num_workers=8,
         fp16=True,
         optim="adamw_torch_fused",
+        remove_unused_columns=False,
     )
-
-    def data_collator(features: list) -> dict:
-        input_ids = torch.tensor([f[0] for f in features])
-        attention_mask = torch.ones_like(input_ids)
-        labels = torch.tensor([f[1] for f in features])
-        chromosome_positions = torch.tensor([f[2] for f in features])
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "chromosome_positions": chromosome_positions,
-        }
 
     accuracy_metric = evaluate.load("accuracy")
 

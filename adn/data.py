@@ -4,6 +4,8 @@ from loguru import logger
 import numpy as np
 import pandas as pd
 import polars as pl
+from sklearn.utils import compute_class_weight
+import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -43,8 +45,9 @@ def load_datasets(
     individuals_snp_dir: Path,
     metadata_path: Path,
     train_eval_split: float,
-    sequence_per_individual: int,
     sequence_length: int,
+    mode: str,
+    sequence_per_individual: int = -1,
     data_ratio_to_use: float = 1.0,
 ):
     metadata = load_metadata(metadata_path).set_index("individual")
@@ -71,33 +74,31 @@ def load_datasets(
     test_dataframes = {
         individual: dataframes[individual] for individual in test_metadata.index
     }
-    train_dataset = DNADataset(
-        metadata_df=train_metadata,
-        dataframes=train_dataframes,
-        max_position=max_position,
-        sequence_per_individual=sequence_per_individual,
-        sequence_length=sequence_length,
-        label_to_id=label_to_id,
-        tokenizer=dna_tokenizer,
+
+    kwargs = {
+        "max_position": max_position,
+        "sequence_length": sequence_length,
+        "label_to_id": label_to_id,
+        "tokenizer": dna_tokenizer,
+    }
+
+    if mode == "random":
+        selected_ds_class = RandomDNADataset
+        kwargs["sequence_per_individual"] = sequence_per_individual
+    elif mode == "sequential":
+        selected_ds_class = SequentialDNADataset
+    else:
+        raise ValueError(f"Unknown mode: {mode}, expected 'random' or 'sequential'")
+
+    train_dataset = selected_ds_class(
+        metadata_df=train_metadata, dataframes=train_dataframes, **kwargs
     )
 
-    test_dataset = DNADataset(
-        metadata_df=test_metadata,
-        dataframes=test_dataframes,
-        max_position=max_position,
-        sequence_per_individual=sequence_per_individual,
-        sequence_length=sequence_length,
-        label_to_id=label_to_id,
-        tokenizer=dna_tokenizer,
+    test_dataset = selected_ds_class(
+        metadata_df=test_metadata, dataframes=test_dataframes, **kwargs
     )
 
     return train_dataset, test_dataset
-
-
-@dataclass
-class DNACursor:
-    individual: str
-    position: int
 
 
 class DNADataset(Dataset):
@@ -107,61 +108,35 @@ class DNADataset(Dataset):
         metadata_df: pd.DataFrame,
         dataframes: dict[str, pl.DataFrame],
         max_position: int,
-        sequence_per_individual: int,
         sequence_length: int,
         label_to_id: dict[str, int],
         tokenizer: PreTrainedTokenizerFast,
-        mode="random",
     ):
         super().__init__()
         self.metadata_df = metadata_df
-        self.individuals = self.metadata_df.index.to_list()
+        self.individuals = sorted(self.metadata_df.index.to_list())
         self.dataframes = dataframes
         self.max_position = max_position
-        self.sequence_per_individual = sequence_per_individual
         self.sequence_length = sequence_length
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
-        self.mode = mode
-        self.cursor = DNACursor(individual=self.individuals[0], position=0)
-        logger.info(f"Loaded {len(self.individuals)} individuals")
 
-    def get_random_sub_df(self) -> tuple[pl.DataFrame, str]:
-        individual = np.random.choice(list(self.individuals))
-        df = self.dataframes[individual]
-        snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
-        sub_df = df[snp_idx : snp_idx + self.sequence_length]
-        return sub_df, individual
+    @property
+    def class_weights(self) -> np.ndarray:
+        return compute_class_weight(
+            "balanced",
+            classes=np.array(list(self.label_to_id.keys())),
+            y=self.metadata_df["GroupK4"],
+        )
 
-    def get_next_sub_df(self) -> tuple[pl.DataFrame, str]:
-        df = self.dataframes[self.cursor.individual]
-        if self.cursor.position + self.sequence_length >= df.shape[0]:
-            self.cursor = DNACursor(
-                individual=self.individuals[
-                    self.individuals.index(self.cursor.individual) + 1
-                ],
-                position=0,
-            )
-            df = self.dataframes[self.cursor.individual]
-
-        sub_df = df[self.cursor.position : self.cursor.position + self.sequence_length]
-        return sub_df, self.cursor.individual
-
-    def __len__(self):
-        return len(self.individuals) * self.sequence_per_individual
-
-    def __getitem__(self, idx):
-        if self.mode == "random":
-            sub_df, individual = self.get_random_sub_df()
-        elif self.mode == "sequential":
-            sub_df, individual = self.get_next_sub_df()
-        else:
-            raise ValueError(f"Invalid mode : {self.mode}")
-
+    def _prepare_sequence(self, sub_df, individual):
         sequence_position = sub_df["position"].to_numpy().astype(np.float32)
-        sequence_position = (sequence_position / self.max_position).tolist()
-        sequence_position = (
-            [sequence_position[0]] + sequence_position + [sequence_position[-1]]
+        scaled_sequence_position = (sequence_position / self.max_position).tolist()
+        # Duplicate start and end positions to match with BOS and EOS tokens
+        scaled_sequence_position = (
+            [scaled_sequence_position[0]]
+            + scaled_sequence_position
+            + [scaled_sequence_position[-1]]
         )
 
         sequence = (
@@ -176,4 +151,109 @@ class DNADataset(Dataset):
 
         label = self.metadata_df.loc[individual, "GroupK4"]
         label_id = self.label_to_id[label]
-        return sequence, label_id, sequence_position
+
+        return {
+            "input_ids": sequence,
+            "labels": label_id,
+            "chromosome_positions": scaled_sequence_position,
+            "interval": (sequence_position[0], sequence_position[-1]),
+            "individual": individual,
+        }
+
+
+class RandomDNADataset(DNADataset):
+
+    def __init__(
+        self,
+        metadata_df,
+        dataframes,
+        max_position,
+        sequence_per_individual,
+        sequence_length,
+        label_to_id,
+        tokenizer,
+    ):
+        super().__init__(
+            metadata_df,
+            dataframes,
+            max_position,
+            sequence_length,
+            label_to_id,
+            tokenizer,
+        )
+        self.sequence_per_individual = sequence_per_individual
+
+    def __len__(self):
+        return len(self.individuals) * self.sequence_per_individual
+
+    def __getitem__(self, idx):
+        individual = np.random.choice(self.individuals)
+        df = self.dataframes[individual]
+        snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
+        sub_df = df[snp_idx : snp_idx + self.sequence_length]
+
+        return self._prepare_sequence(sub_df, individual)
+
+
+class SequentialDNADataset(DNADataset):
+
+    def __init__(
+        self,
+        metadata_df,
+        dataframes,
+        max_position,
+        sequence_length,
+        label_to_id,
+        tokenizer,
+    ):
+        super().__init__(
+            metadata_df,
+            dataframes,
+            max_position,
+            sequence_length,
+            label_to_id,
+            tokenizer,
+        )
+        self.current_individual = self.individuals[0]
+        self.current_position = 0
+
+    def __len__(self):
+        count = 0
+        for individual in self.individuals:
+            count += self.dataframes[individual].shape[0] // self.sequence_length
+        return count
+
+    def __getitem__(self, idx):
+        df = self.dataframes[self.current_individual]
+        if self.current_position + self.sequence_length >= df.shape[0]:
+            next_individual_idx = self.individuals.index(self.current_individual) + 1
+
+            if next_individual_idx >= len(self.individuals):
+                raise StopIteration("End of dataset reached")
+
+            self.current_individual = self.individuals[next_individual_idx]
+            self.current_position = 0
+            logger.info(
+                f"Switching to individual {next_individual_idx} : {self.current_individual}"
+            )
+
+            df = self.dataframes[self.current_individual]
+
+        sub_df = df[
+            self.current_position : self.current_position + self.sequence_length
+        ]
+        self.current_position += self.sequence_length
+        return self._prepare_sequence(sub_df, self.current_individual)
+
+
+def data_collator(features: list) -> dict:
+    input_ids = torch.tensor([f["input_ids"] for f in features])
+    attention_mask = torch.ones_like(input_ids)
+    labels = torch.tensor([f["labels"] for f in features])
+    chromosome_positions = torch.tensor([f["chromosome_positions"] for f in features])
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+        "chromosome_positions": chromosome_positions,
+    }
