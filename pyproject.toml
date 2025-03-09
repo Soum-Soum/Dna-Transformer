@@ -6,7 +6,7 @@ authors = [
     {name = "Pierre Carceller Meunier",email = "pierre.carcellermeunier@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12,<4.0"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "pyarrow (>=19.0.0,<20.0.0)",
     "typer (>=0.15.1,<0.16.0)",
@@ -20,15 +20,13 @@ dependencies = [
     "pydantic (>=2.10.6,<3.0.0)",
     "click (>=8.1.8,<9.0.0)",
     "loguru (>=0.7.3,<0.8.0)",
-    "torch (>=2.6.0,<3.0.0)",
     "transformers[torch] (>=4.49.0,<5.0.0)",
     "scikit-learn (>=1.6.1,<2.0.0)",
-    "torchvision (>=0.21.0,<0.22.0)",
-    "torchaudio (>=2.6.0,<3.0.0)",
     "datasets (>=3.3.2,<4.0.0)",
     "evaluate (>=0.4.3,<0.5.0)",
-    "opentsne (>=1.0.2,<2.0.0)",
-    "deepspeed (>=0.16.4,<0.17.0)",
+    "torch (>=2.6.0,<3.0.0)",
+    "torchvision (>=0.21.0,<0.22.0)",
+    "torchaudio (>=2.6.0,<3.0.0)",
 ]
 
 
@@ -39,18 +37,12 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.group.dev.dependencies]
 black = "^25.1.0"
 
-
 [[tool.poetry.source]]
-name = "pytorch_cpu"
-url = "https://download.pytorch.org/whl/cpu"
-priority = "explicit"
-
-[[tool.poetry.source]]
-name = "pytorch_cuda"
+name = "pytorch"
 url = "https://download.pytorch.org/whl/cu126"
 priority = "explicit"
 
 [tool.poetry.dependencies]
-torch = {source = "pytorch_cuda"}
-torchvision = {source = "pytorch_cuda"}
-torchaudio = {source = "pytorch_cuda"}
+torch = {source = "pytorch"}
+torchvision = {source = "pytorch"}
+torchaudio = {source = "pytorch"}

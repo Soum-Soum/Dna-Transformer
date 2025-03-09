@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 from loguru import logger
 import numpy as np
@@ -93,6 +94,12 @@ def load_datasets(
     return train_dataset, test_dataset
 
 
+@dataclass
+class DNACursor:
+    individual: str
+    position: int
+
+
 class DNADataset(Dataset):
 
     def __init__(
@@ -104,6 +111,7 @@ class DNADataset(Dataset):
         sequence_length: int,
         label_to_id: dict[str, int],
         tokenizer: PreTrainedTokenizerFast,
+        mode="random",
     ):
         super().__init__()
         self.metadata_df = metadata_df
@@ -114,22 +122,48 @@ class DNADataset(Dataset):
         self.sequence_length = sequence_length
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
+        self.mode = mode
+        self.cursor = DNACursor(individual=self.individuals[0], position=0)
         logger.info(f"Loaded {len(self.individuals)} individuals")
+
+    def get_random_sub_df(self) -> tuple[pl.DataFrame, str]:
+        individual = np.random.choice(list(self.individuals))
+        df = self.dataframes[individual]
+        snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
+        sub_df = df[snp_idx : snp_idx + self.sequence_length]
+        return sub_df, individual
+
+    def get_next_sub_df(self) -> tuple[pl.DataFrame, str]:
+        df = self.dataframes[self.cursor.individual]
+        if self.cursor.position + self.sequence_length >= df.shape[0]:
+            self.cursor = DNACursor(
+                individual=self.individuals[
+                    self.individuals.index(self.cursor.individual) + 1
+                ],
+                position=0,
+            )
+            df = self.dataframes[self.cursor.individual]
+
+        sub_df = df[self.cursor.position : self.cursor.position + self.sequence_length]
+        return sub_df, self.cursor.individual
 
     def __len__(self):
         return len(self.individuals) * self.sequence_per_individual
 
     def __getitem__(self, idx):
-        individual = np.random.choice(list(self.individuals))
-        df = self.dataframes[individual]
-        snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
+        if self.mode == "random":
+            sub_df, individual = self.get_random_sub_df()
+        elif self.mode == "sequential":
+            sub_df, individual = self.get_next_sub_df()
+        else:
+            raise ValueError(f"Invalid mode : {self.mode}")
 
-        sub_df = df[snp_idx : snp_idx + self.sequence_length]
-        
         sequence_position = sub_df["position"].to_numpy().astype(np.float32)
         sequence_position = (sequence_position / self.max_position).tolist()
-        sequence_position = [sequence_position[0]] + sequence_position + [sequence_position[-1]]
-        
+        sequence_position = (
+            [sequence_position[0]] + sequence_position + [sequence_position[-1]]
+        )
+
         sequence = (
             sub_df[["main_allele", "allele"]]
             .map_rows(lambda x: "".join(x))

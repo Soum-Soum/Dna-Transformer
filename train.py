@@ -6,13 +6,16 @@ import numpy as np
 from adn.data import load_datasets
 from adn.plots import plot_trainer_logs, plot_tsne
 from adn.tokenizer import get_tokenizer
-from adn.models.bert import CustomBertForSequenceClassification 
+from adn.models.bert import CustomBertForSequenceClassification
 from transformers import BertConfig, Trainer, TrainingArguments
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import evaluate
 
-def get_predictions(model, eval_dl: DataLoader, max_batches: Optional[int] = None) -> list:
+
+def get_predictions(
+    model, eval_dl: DataLoader, max_batches: Optional[int] = None
+) -> list:
     res = []
     with torch.no_grad():
         for i, batch in enumerate(tqdm(eval_dl)):
@@ -24,19 +27,26 @@ def get_predictions(model, eval_dl: DataLoader, max_batches: Optional[int] = Non
             res += list(zip(embedings, positions, labels))
             if max_batches and i > max_batches:
                 break
-            
+
     return res
+
 
 @click.command()
 @click.option("--individuals-snp-dir", help="Directory containing individuals SNPs.")
 @click.option("--metadata-path", help="Path to metadata file.")
 @click.option("--output-dir", help="Model checkpoint to resume from.")
 @click.option("--run-name", help="Name of the run.")
-@click.option("--sequence-per-individual", default=250, help="Number of sequences per individual.")
+@click.option(
+    "--sequence-per-individual", default=250, help="Number of sequences per individual."
+)
 @click.option("--sequence-length", default=128, help="Length of each sequence.")
-@click.option("--train-eval-split", default=0.1, help="Proportion of dataset for evaluation.")
+@click.option(
+    "--train-eval-split", default=0.1, help="Proportion of dataset for evaluation."
+)
 @click.option("--epochs", default=20, help="Number of training epochs.")
-@click.option("--batch-size", default=256, help="Batch size for training and evaluation.")
+@click.option(
+    "--batch-size", default=256, help="Batch size for training and evaluation."
+)
 @click.option("--learning-rate", default=1e-3, help="Learning rate for training.")
 def train_model(
     individuals_snp_dir,
@@ -48,7 +58,7 @@ def train_model(
     train_eval_split,
     epochs,
     batch_size,
-    learning_rate
+    learning_rate,
 ):
     train_ds, eval_ds = load_datasets(
         individuals_snp_dir=Path(individuals_snp_dir),
@@ -70,10 +80,10 @@ def train_model(
     )
 
     model = CustomBertForSequenceClassification(config)
-    
+
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
-    
+
     training_args = TrainingArguments(
         output_dir=output_dir / "checkpoints",
         eval_strategy="epoch",
@@ -87,9 +97,9 @@ def train_model(
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         warmup_ratio=0.05,
-        dataloader_num_workers=4,
+        dataloader_num_workers=8,
         fp16=True,
-        optim="adamw_torch_fused"
+        optim="adamw_torch_fused",
     )
 
     def data_collator(features: list) -> dict:
@@ -126,10 +136,12 @@ def train_model(
 
     plot_trainer_logs(trainer.state.log_history, output_dir)
 
-    eval_data_loader = DataLoader(eval_ds, batch_size=32, collate_fn=data_collator, num_workers=4)
+    eval_data_loader = DataLoader(
+        eval_ds, batch_size=32, collate_fn=data_collator, num_workers=4
+    )
     predictions = get_predictions(model, eval_data_loader)
-    
-    plot_tsne(res = predictions, output_dir = output_dir)
+
+    plot_tsne(res=predictions, output_dir=output_dir)
 
 
 if __name__ == "__main__":
