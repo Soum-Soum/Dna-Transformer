@@ -1,6 +1,7 @@
 from typing import Optional
 import click
 from pathlib import Path
+from loguru import logger
 import torch
 import numpy as np
 from adn.data import data_collator, load_datasets
@@ -27,14 +28,13 @@ def get_predictions(
             res += list(zip(embedings, positions, labels))
             if max_batches and i > max_batches:
                 break
-
     return res
 
 
 @click.command()
 @click.option("--individuals-snp-dir", help="Directory containing individuals SNPs.")
 @click.option("--metadata-path", help="Path to metadata file.")
-@click.option("--output-dir", help="Model checkpoint to resume from.")
+@click.option("--output-dir", help="Directory to save model checkpoints.")
 @click.option("--run-name", help="Name of the run.")
 @click.option(
     "--sequence-per-individual", default=250, help="Number of sequences per individual."
@@ -48,6 +48,19 @@ def get_predictions(
     "--batch-size", default=256, help="Batch size for training and evaluation."
 )
 @click.option("--learning-rate", default=1e-3, help="Learning rate for training.")
+@click.option(
+    "--labels-to-remove", default=None, help="Labels to remove from metadata."
+)
+@click.option(
+    "--checkpoint-dir",
+    default=None,
+    help="Path to a checkpoint to resume training from.",
+)
+@click.option(
+    "--individuals-to-ignore",
+    default=None,
+    help="List of individuals to ignore during training.",
+)   
 def train_model(
     individuals_snp_dir,
     metadata_path,
@@ -59,8 +72,10 @@ def train_model(
     epochs,
     batch_size,
     learning_rate,
+    labels_to_remove,
+    checkpoint_dir,
+    individuals_to_ignore,
 ):
-
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
 
@@ -72,6 +87,8 @@ def train_model(
         train_eval_split=train_eval_split,
         data_ratio_to_use=1,
         mode="random",
+        labels_to_remove=labels_to_remove,
+        individual_to_ignore=individuals_to_ignore,
     )
 
     dim = 256
@@ -80,13 +97,21 @@ def train_model(
         hidden_size=dim,
         intermediate_size=4 * dim,
         num_attention_heads=8,
-        num_labels=3,
+        num_labels=len(train_ds.label_to_id),
         position_embedding_type="absolute",
     )
 
-    model = CustomBertForSequenceClassification(
-        config, class_weights=train_ds.class_weights
-    )
+    if checkpoint_dir is None:
+        model = CustomBertForSequenceClassification(
+            config, class_weights=train_ds.class_weights
+        )
+    else:
+        model = CustomBertForSequenceClassification.from_pretrained(
+            checkpoint_dir,
+            config=config,
+            ignore_mismatched_sizes=True,
+            class_weights=train_ds.class_weights,
+        )
 
     training_args = TrainingArguments(
         output_dir=output_dir / "checkpoints",
@@ -132,7 +157,7 @@ def train_model(
     eval_data_loader = DataLoader(
         eval_ds, batch_size=32, collate_fn=data_collator, num_workers=4
     )
-    predictions = get_predictions(model, eval_data_loader)
+    predictions = get_predictions(model, eval_data_loader, max_batches=100)
 
     plot_tsne(res=predictions, output_dir=output_dir)
 

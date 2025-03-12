@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 from loguru import logger
 import numpy as np
 import pandas as pd
@@ -12,6 +13,8 @@ from sklearn.model_selection import train_test_split
 from transformers import PreTrainedTokenizerFast
 
 from adn.tokenizer import get_tokenizer
+
+labels = {"XI", "GJ", "cA"}
 
 
 def load_dataframes(
@@ -28,9 +31,26 @@ def load_dataframes(
     return dataframes
 
 
-def load_metadata(metadata_path: Path) -> pd.DataFrame:
+def load_metadata(
+    metadata_path: Path,
+    labels_to_remove: Optional[str],
+    data_ratio_to_use: float,
+    individual_to_ignore: Optional[str],
+) -> pd.DataFrame:
+    if labels_to_remove:
+        labels_to_remove = set(labels_to_remove.split(","))
+        label_to_use = labels - labels_to_remove
+        logger.info(f"Using labels: {label_to_use}. Excluding: {labels_to_remove}")
+    else:
+        label_to_use = labels
+
     metadata = pd.read_csv(metadata_path, sep="\t")
-    metadata = metadata[metadata["GroupK4"].isin(["XI", "GJ", "cA"])]
+    metadata = metadata[metadata["GroupK4"].isin(label_to_use)]
+    if individual_to_ignore:
+        individuals_to_ignore = load_individuals_to_ignore(individual_to_ignore)
+        metadata = metadata[~metadata["individual"].isin(individuals_to_ignore)]
+        logger.info(f"Ignoring individuals: {individuals_to_ignore}")
+    metadata = metadata.sample(frac=data_ratio_to_use, random_state=42)
     return metadata
 
 
@@ -41,6 +61,12 @@ def compute_max_position(dataframes: dict[str, pl.DataFrame]) -> int:
     return max_position
 
 
+def load_individuals_to_ignore(individuals_to_ignore: str) -> set[str]:
+    with open(individuals_to_ignore, "r") as f:
+        individuals = set(f.read().splitlines())
+    return individuals
+
+
 def load_datasets(
     individuals_snp_dir: Path,
     metadata_path: Path,
@@ -49,9 +75,12 @@ def load_datasets(
     mode: str,
     sequence_per_individual: int = -1,
     data_ratio_to_use: float = 1.0,
+    labels_to_remove: Optional[str] = None,
+    individual_to_ignore: Optional[str] = None,
 ):
-    metadata = load_metadata(metadata_path).set_index("individual")
-    metadata = metadata.sample(frac=data_ratio_to_use, random_state=42)
+    metadata = load_metadata(
+        metadata_path, labels_to_remove, data_ratio_to_use, individual_to_ignore
+    ).set_index("individual")
     individuals = metadata.index.to_list()
     dataframes = load_dataframes(individuals_snp_dir, individuals)
     max_position = compute_max_position(dataframes)
@@ -83,7 +112,7 @@ def load_datasets(
     }
 
     if mode == "random":
-        selected_ds_class = RandomDNADataset
+        selected_ds_class = RandomFixedLenDNADataset
         kwargs["sequence_per_individual"] = sequence_per_individual
     elif mode == "sequential":
         selected_ds_class = SequentialDNADataset
@@ -93,10 +122,14 @@ def load_datasets(
     train_dataset = selected_ds_class(
         metadata_df=train_metadata, dataframes=train_dataframes, **kwargs
     )
+    logger.info(
+        f"Train dataset loaded with {len(train_dataset.metadata_df)} individuals"
+    )
 
     test_dataset = selected_ds_class(
         metadata_df=test_metadata, dataframes=test_dataframes, **kwargs
     )
+    logger.info(f"Test dataset loaded with {len(test_dataset.metadata_df)} individuals")
 
     return train_dataset, test_dataset
 
@@ -161,7 +194,7 @@ class DNADataset(Dataset):
         }
 
 
-class RandomDNADataset(DNADataset):
+class RandomFixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
@@ -193,6 +226,10 @@ class RandomDNADataset(DNADataset):
         sub_df = df[snp_idx : snp_idx + self.sequence_length]
 
         return self._prepare_sequence(sub_df, individual)
+
+
+# class RandomVariableLenDNADataset(DNADataset):
+#     pass
 
 
 class SequentialDNADataset(DNADataset):
