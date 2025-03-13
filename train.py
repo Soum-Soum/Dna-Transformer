@@ -4,7 +4,7 @@ from pathlib import Path
 from loguru import logger
 import torch
 import numpy as np
-from adn.data import data_collator, load_datasets
+from adn.data import DatasetMode, data_collator, load_datasets
 from adn.plots import plot_trainer_logs, plot_tsne
 from adn.tokenizer import get_tokenizer
 from adn.models.bert import CustomBertForSequenceClassification
@@ -41,6 +41,11 @@ def get_predictions(
 )
 @click.option("--sequence-length", default=128, help="Length of each sequence.")
 @click.option(
+    "--interval-length",
+    type=int,
+    help="Length of the interval to use for training.",
+)
+@click.option(
     "--train-eval-split", default=0.1, help="Proportion of dataset for evaluation."
 )
 @click.option("--epochs", default=20, help="Number of training epochs.")
@@ -60,21 +65,21 @@ def get_predictions(
     "--individuals-to-ignore",
     default=None,
     help="List of individuals to ignore during training.",
-)   
+)
 def train_model(
-    individuals_snp_dir,
-    metadata_path,
-    output_dir,
-    run_name,
-    sequence_per_individual,
-    sequence_length,
-    train_eval_split,
-    epochs,
-    batch_size,
-    learning_rate,
-    labels_to_remove,
-    checkpoint_dir,
-    individuals_to_ignore,
+    individuals_snp_dir: str,
+    metadata_path: str,
+    output_dir: str,
+    run_name: str,
+    sequence_per_individual: int,
+    sequence_length: int,
+    train_eval_split: float,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    labels_to_remove: str,
+    checkpoint_dir: str,
+    individuals_to_ignore: str,
 ):
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
@@ -86,7 +91,7 @@ def train_model(
         sequence_length=sequence_length,
         train_eval_split=train_eval_split,
         data_ratio_to_use=1,
-        mode="random",
+        mode=DatasetMode.RANDOM_FIXED_LEN,
         labels_to_remove=labels_to_remove,
         individual_to_ignore=individuals_to_ignore,
     )

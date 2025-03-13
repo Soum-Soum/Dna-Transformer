@@ -67,13 +67,19 @@ def load_individuals_to_ignore(individuals_to_ignore: str) -> set[str]:
     return individuals
 
 
+class DatasetMode:
+    RANDOM_FIXED_LEN = "random_fixed_len"
+    SEQUENTIAL_FIXED_LEN = "sequential_fixed_len"
+
+
 def load_datasets(
     individuals_snp_dir: Path,
     metadata_path: Path,
     train_eval_split: float,
     sequence_length: int,
-    mode: str,
+    mode: DatasetMode,
     sequence_per_individual: int = -1,
+    overlaping_ratio: float = -1,
     data_ratio_to_use: float = 1.0,
     labels_to_remove: Optional[str] = None,
     individual_to_ignore: Optional[str] = None,
@@ -84,40 +90,50 @@ def load_datasets(
     individuals = metadata.index.to_list()
     dataframes = load_dataframes(individuals_snp_dir, individuals)
     max_position = compute_max_position(dataframes)
-    train_metadata, test_metadata, _, _ = train_test_split(
-        metadata,
-        metadata,
-        test_size=train_eval_split,
-        random_state=42,
-        stratify=metadata["GroupK4"],
-    )
+
+    if train_test_split == 0:
+        train_metadata, test_metadata, _, _ = train_test_split(
+            metadata,
+            metadata,
+            test_size=train_eval_split,
+            random_state=42,
+            stratify=metadata["GroupK4"],
+        )
+    else:
+        train_metadata = metadata
+        test_metadata = None
 
     label_to_id = {
         label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())
     }
     dna_tokenizer = get_tokenizer()
 
-    train_dataframes = {
-        individual: dataframes[individual] for individual in train_metadata.index
-    }
-    test_dataframes = {
-        individual: dataframes[individual] for individual in test_metadata.index
-    }
-
     kwargs = {
         "max_position": max_position,
-        "sequence_length": sequence_length,
         "label_to_id": label_to_id,
         "tokenizer": dna_tokenizer,
     }
 
-    if mode == "random":
+    if mode == DatasetMode.RANDOM_FIXED_LEN:
+        assert (
+            sequence_per_individual > 0
+        ), "Sequence per individual must be greater than 0"
         selected_ds_class = RandomFixedLenDNADataset
         kwargs["sequence_per_individual"] = sequence_per_individual
-    elif mode == "sequential":
-        selected_ds_class = SequentialDNADataset
+        kwargs["sequence_length"] = sequence_length
+    elif mode == DatasetMode.SEQUENTIAL_FIXED_LEN:
+        assert (
+            sequence_per_individual == -1
+        ), "Sequence per individual not supported in sequential mode"
+        selected_ds_class = SequentialFixedLenDNADataset
+        kwargs["overlaping_ratio"] = overlaping_ratio
+        kwargs["sequence_length"] = sequence_length
     else:
         raise ValueError(f"Unknown mode: {mode}, expected 'random' or 'sequential'")
+
+    train_dataframes = {
+        individual: dataframes[individual] for individual in train_metadata.index
+    }
 
     train_dataset = selected_ds_class(
         metadata_df=train_metadata, dataframes=train_dataframes, **kwargs
@@ -125,6 +141,13 @@ def load_datasets(
     logger.info(
         f"Train dataset loaded with {len(train_dataset.metadata_df)} individuals"
     )
+
+    if test_metadata is None:
+        return train_dataset, None
+
+    test_dataframes = {
+        individual: dataframes[individual] for individual in test_metadata.index
+    }
 
     test_dataset = selected_ds_class(
         metadata_df=test_metadata, dataframes=test_dataframes, **kwargs
@@ -134,6 +157,19 @@ def load_datasets(
     return train_dataset, test_dataset
 
 
+def data_collator(features: list) -> dict:
+    input_ids = torch.tensor([f["input_ids"] for f in features])
+    attention_mask = torch.ones_like(input_ids)
+    labels = torch.tensor([f["labels"] for f in features])
+    chromosome_positions = torch.tensor([f["chromosome_positions"] for f in features])
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+        "chromosome_positions": chromosome_positions,
+    }
+
+
 class DNADataset(Dataset):
 
     def __init__(
@@ -141,7 +177,6 @@ class DNADataset(Dataset):
         metadata_df: pd.DataFrame,
         dataframes: dict[str, pl.DataFrame],
         max_position: int,
-        sequence_length: int,
         label_to_id: dict[str, int],
         tokenizer: PreTrainedTokenizerFast,
     ):
@@ -150,7 +185,6 @@ class DNADataset(Dataset):
         self.individuals = sorted(self.metadata_df.index.to_list())
         self.dataframes = dataframes
         self.max_position = max_position
-        self.sequence_length = sequence_length
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
 
@@ -194,25 +228,46 @@ class DNADataset(Dataset):
         }
 
 
-class RandomFixedLenDNADataset(DNADataset):
+class FixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
-        metadata_df,
-        dataframes,
-        max_position,
-        sequence_per_individual,
-        sequence_length,
-        label_to_id,
-        tokenizer,
+        metadata_df: pd.DataFrame,
+        dataframes: dict[str, pl.DataFrame],
+        max_position: int,
+        label_to_id: dict[str, int],
+        tokenizer: PreTrainedTokenizerFast,
+        sequence_length: int,
     ):
         super().__init__(
-            metadata_df,
-            dataframes,
-            max_position,
-            sequence_length,
-            label_to_id,
-            tokenizer,
+            metadata_df=metadata_df,
+            dataframes=dataframes,
+            max_position=max_position,
+            label_to_id=label_to_id,
+            tokenizer=tokenizer,
+        )
+        self.sequence_length = sequence_length
+
+
+class RandomFixedLenDNADataset(FixedLenDNADataset):
+
+    def __init__(
+        self,
+        metadata_df: pd.DataFrame,
+        dataframes: dict[str, pl.DataFrame],
+        max_position: int,
+        label_to_id: dict[str, int],
+        tokenizer: PreTrainedTokenizerFast,
+        sequence_length: int,
+        sequence_per_individual: int,
+    ):
+        super().__init__(
+            metadata_df=metadata_df,
+            dataframes=dataframes,
+            max_position=max_position,
+            label_to_id=label_to_id,
+            tokenizer=tokenizer,
+            sequence_length=sequence_length,
         )
         self.sequence_per_individual = sequence_per_individual
 
@@ -228,36 +283,36 @@ class RandomFixedLenDNADataset(DNADataset):
         return self._prepare_sequence(sub_df, individual)
 
 
-# class RandomVariableLenDNADataset(DNADataset):
-#     pass
-
-
-class SequentialDNADataset(DNADataset):
+class SequentialFixedLenDNADataset(FixedLenDNADataset):
 
     def __init__(
         self,
-        metadata_df,
-        dataframes,
-        max_position,
-        sequence_length,
-        label_to_id,
-        tokenizer,
+        metadata_df: pd.DataFrame,
+        dataframes: dict[str, pl.DataFrame],
+        max_position: int,
+        label_to_id: dict[str, int],
+        tokenizer: PreTrainedTokenizerFast,
+        sequence_length: int,
+        overlaping_ratio: float,
     ):
         super().__init__(
-            metadata_df,
-            dataframes,
-            max_position,
-            sequence_length,
-            label_to_id,
-            tokenizer,
+            metadata_df=metadata_df,
+            dataframes=dataframes,
+            max_position=max_position,
+            label_to_id=label_to_id,
+            tokenizer=tokenizer,
+            sequence_length=sequence_length,
         )
+        self.overlaping_ratio = overlaping_ratio
         self.current_individual = self.individuals[0]
         self.current_position = 0
 
     def __len__(self):
         count = 0
         for individual in self.individuals:
-            count += self.dataframes[individual].shape[0] // self.sequence_length
+            count += self.dataframes[individual].shape[0] // int(
+                self.sequence_length * (1 - self.overlaping_ratio)
+            )
         return count
 
     def __getitem__(self, idx):
@@ -279,18 +334,5 @@ class SequentialDNADataset(DNADataset):
         sub_df = df[
             self.current_position : self.current_position + self.sequence_length
         ]
-        self.current_position += self.sequence_length
+        self.current_position += int(self.sequence_length * (1 - self.overlaping_ratio))
         return self._prepare_sequence(sub_df, self.current_individual)
-
-
-def data_collator(features: list) -> dict:
-    input_ids = torch.tensor([f["input_ids"] for f in features])
-    attention_mask = torch.ones_like(input_ids)
-    labels = torch.tensor([f["labels"] for f in features])
-    chromosome_positions = torch.tensor([f["chromosome_positions"] for f in features])
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
-        "chromosome_positions": chromosome_positions,
-    }
