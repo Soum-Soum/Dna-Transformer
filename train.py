@@ -1,5 +1,5 @@
 from typing import Optional
-import click
+import typer
 from pathlib import Path
 from loguru import logger
 import torch
@@ -13,73 +13,41 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import evaluate
 
+app = typer.Typer()
 
 def get_predictions(
-    model, eval_dl: DataLoader, max_batches: Optional[int] = None
+    model: CustomBertForSequenceClassification, 
+    eval_dl: DataLoader, 
+    max_batches: Optional[int] = None
 ) -> list:
     res = []
     with torch.no_grad():
         for i, batch in enumerate(tqdm(eval_dl)):
             batch = {k: v.cuda() for k, v in batch.items()}
             labels = batch.pop("labels").cpu().detach().numpy()
-            preds = model.embed(**batch)
-            embedings = preds.pooler_output.cpu().detach().numpy()
+            preds = model.predict(**batch)[0]
+            embeddings = preds.pooler_output.cpu().detach().numpy()
             positions = batch["chromosome_positions"].cpu().detach().numpy()
-            res += list(zip(embedings, positions, labels))
+            res += list(zip(embeddings, positions, labels))
             if max_batches and i > max_batches:
                 break
     return res
 
-
-@click.command()
-@click.option("--individuals-snp-dir", help="Directory containing individuals SNPs.")
-@click.option("--metadata-path", help="Path to metadata file.")
-@click.option("--output-dir", help="Directory to save model checkpoints.")
-@click.option("--run-name", help="Name of the run.")
-@click.option(
-    "--sequence-per-individual", default=250, help="Number of sequences per individual."
-)
-@click.option("--sequence-length", default=128, help="Length of each sequence.")
-@click.option(
-    "--interval-length",
-    type=int,
-    help="Length of the interval to use for training.",
-)
-@click.option(
-    "--train-eval-split", default=0.1, help="Proportion of dataset for evaluation."
-)
-@click.option("--epochs", default=20, help="Number of training epochs.")
-@click.option(
-    "--batch-size", default=256, help="Batch size for training and evaluation."
-)
-@click.option("--learning-rate", default=1e-3, help="Learning rate for training.")
-@click.option(
-    "--labels-to-remove", default=None, help="Labels to remove from metadata."
-)
-@click.option(
-    "--checkpoint-dir",
-    default=None,
-    help="Path to a checkpoint to resume training from.",
-)
-@click.option(
-    "--individuals-to-ignore",
-    default=None,
-    help="List of individuals to ignore during training.",
-)
+@app.command()
 def train_model(
-    individuals_snp_dir: str,
-    metadata_path: str,
-    output_dir: str,
-    run_name: str,
-    sequence_per_individual: int,
-    sequence_length: int,
-    train_eval_split: float,
-    epochs: int,
-    batch_size: int,
-    learning_rate: float,
-    labels_to_remove: str,
-    checkpoint_dir: str,
-    individuals_to_ignore: str,
+    individuals_snp_dir: str = typer.Option(..., help="Directory containing individuals SNPs."),
+    metadata_path: str = typer.Option(..., help="Path to metadata file."),
+    output_dir: str = typer.Option(..., help="Directory to save model checkpoints."),
+    run_name: str = typer.Option(..., help="Name of the run."),
+    sequence_per_individual: int = typer.Option(250, help="Number of sequences per individual."),
+    sequence_length: int = typer.Option(128, help="Length of each sequence."),
+    train_eval_split: float = typer.Option(0.1, help="Proportion of dataset for evaluation."),
+    epochs: int = typer.Option(20, help="Number of training epochs."),
+    batch_size: int = typer.Option(256, help="Batch size for training and evaluation."),
+    learning_rate: float = typer.Option(1e-3, help="Learning rate for training."),
+    labels_to_remove: Optional[str] = typer.Option(None, help="Labels to remove from metadata."),
+    checkpoint_dir: Optional[str] = typer.Option(None, help="Path to a checkpoint to resume training from."),
+    individuals_to_ignore: Optional[str] = typer.Option(None, help="List of individuals to ignore during training."),
 ):
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
@@ -166,6 +134,5 @@ def train_model(
 
     plot_tsne(res=predictions, output_dir=output_dir)
 
-
 if __name__ == "__main__":
-    train_model()
+    app()

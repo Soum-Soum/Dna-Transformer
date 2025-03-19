@@ -83,7 +83,7 @@ def load_datasets(
     data_ratio_to_use: float = 1.0,
     labels_to_remove: Optional[str] = None,
     individual_to_ignore: Optional[str] = None,
-):
+) -> tuple["DNADataset", Optional["DNADataset"]]:
     metadata = load_metadata(
         metadata_path, labels_to_remove, data_ratio_to_use, individual_to_ignore
     ).set_index("individual")
@@ -91,7 +91,7 @@ def load_datasets(
     dataframes = load_dataframes(individuals_snp_dir, individuals)
     max_position = compute_max_position(dataframes)
 
-    if train_test_split == 0:
+    if train_eval_split != 0:
         train_metadata, test_metadata, _, _ = train_test_split(
             metadata,
             metadata,
@@ -100,6 +100,7 @@ def load_datasets(
             stratify=metadata["GroupK4"],
         )
     else:
+        logger.info("Train test split set to 0, using all data for training")
         train_metadata = metadata
         test_metadata = None
 
@@ -187,6 +188,10 @@ class DNADataset(Dataset):
         self.max_position = max_position
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
+
+    @property
+    def id_to_label(self) -> dict[int, str]:
+        return {v: k for k, v in self.label_to_id.items()}
 
     @property
     def class_weights(self) -> np.ndarray:

@@ -5,8 +5,9 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
-from adn.data import data_collator
+from adn.data import DNADataset, data_collator
 from adn.models.bert import CustomBertForSequenceClassification
 
 
@@ -21,7 +22,7 @@ class Predictor:
 
     def __init__(self, model_path: Path, batch_size: int = 256):
         self.model_path = model_path
-        self.output_path = self.model_path.parent.parent
+        self.output_path = self.model_path.parent.parent / "predictions"
         self.batch_size = batch_size
         self.model = (
             CustomBertForSequenceClassification.from_pretrained(str(model_path))
@@ -29,7 +30,7 @@ class Predictor:
             .cuda()
         )
 
-    def build_dataloader(self, dataset: Dataset) -> DataLoader:
+    def _build_dataloader(self, dataset: Dataset) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -38,111 +39,109 @@ class Predictor:
             num_workers=1,
         )
 
-    def results_to_df(self, results: list, result_type: str) -> pd.DataFrame:
+    def _results_to_df(self, results: list, ds: DNADataset) -> pd.DataFrame:
         df = pd.DataFrame(
-            results, columns=[result_type, "individual", "interval", "label"]
+            results, columns=["logits", "embeddings", "individual", "interval", "label"]
         )
+        df["label_decoded"] = df["label"].apply(lambda x: ds.id_to_label[x])
         df["start_position"] = df["interval"].apply(lambda x: int(x[0]))
         df["end_position"] = df["interval"].apply(lambda x: int(x[1]))
         df["interval_length"] = df["end_position"] - df["start_position"]
         df = df.drop(columns=["interval"])
 
-        if result_type == "logits":
-            df["pred"] = df["logits"].apply(lambda x: np.argmax(x))
-            df["pred_prob"] = df.apply(lambda x: x["logits"][x["pred"]], axis=1)
-            df["is_error"] = (df["pred"] != df["label"]).astype(int)
-            df["error"] = df.apply(
-                lambda x: min(x["is_error"], 1 - x["pred_prob"]), axis=1
-            )
+        df = df.set_index("individual").join(ds.metadata_df["GroupK9"]).reset_index()
+
+        df["pred"] = df["logits"].apply(lambda x: np.argmax(x))
+        df["pred_prob"] = df.apply(lambda x: x["logits"][x["pred"]], axis=1)
+        df["is_error"] = (df["pred"] != df["label"]).astype(int)
+        df["error"] = df.apply(lambda x: min(x["is_error"], 1 - x["pred_prob"]), axis=1)
         return df
 
-    def save_results(self, results: list, result_type: str) -> None:
-        df = self.results_to_df(results, result_type)
-        current_individual = df["individual"].iloc[0]
-        if result_type == "logits":
-            current_output_path = (
-                self.output_path / "predictions" / f"{current_individual}.parquet"
-            )
-        else:
-            current_output_path = (
-                self.output_path / "embeddings" / f"{current_individual}.parquet"
-            )
+    def _save_results(self, results_df: pd.DataFrame) -> None:
+        current_individual = results_df["individual"].iloc[0]
+        current_df_output_path = self.output_path / f"{current_individual}.parquet"
 
-        current_output_path.parent.mkdir(exist_ok=True, parents=True)
+        current_df_output_path.parent.mkdir(exist_ok=True, parents=True)
+        current_embeddings_output_path = current_df_output_path.with_suffix(".npy")
 
-        df.to_parquet(current_output_path)
+        embeddings = np.stack(results_df["embeddings"].values)
+        np.save(current_embeddings_output_path, embeddings)
+
+        results_df = results_df.drop(columns=["embeddings"])
+        results_df.to_parquet(current_df_output_path)
         logger.info(
-            f"Saved {result_type} for {current_individual} to {current_output_path}"
+            f"Saved predictions for {current_individual} to {current_df_output_path}"
         )
 
-    def process_one_batch(
-        self, batch: dict[str, torch.Tensor], metadata: dict, mode: str
+    def _process_one_batch(
+        self, batch: dict[str, torch.Tensor], metadata: dict
     ) -> list:
         batch = {k: v.cuda() for k, v in batch.items()}
 
-        labels = batch["labels"].detach().cpu().numpy()
-
-        if mode == "predict":
-            output = self.model(**batch)
-            results = (
-                torch.nn.functional.softmax(output.logits, dim=1).detach().cpu().numpy()
-            )
-        elif mode == "embed":
-            batch.pop("labels")
-            preds = self.model.embed(**batch)
-            results = preds.pooler_output.cpu().detach().numpy().tolist()
-        else:
-            raise ValueError("Mode must be 'predict' or 'embed'")
-
-        current_batch_results = list(
-            zip(results, metadata["individual"], metadata["interval"], labels)
+        embeddings_outputs, classifier_outputs = self.model.predict(**batch)
+        logits = (
+            torch.nn.functional.softmax(classifier_outputs.logits, dim=1)
+            .cpu()
+            .detach()
+            .numpy()
         )
 
-        return current_batch_results
+        embeddings = embeddings_outputs.pooler_output.cpu().detach().numpy()
 
-    def process_and_save(self, dataset: Dataset, mode: str):
-        dataloader = self.build_dataloader(dataset)
+        results = list(
+            zip(
+                logits,
+                embeddings,
+                metadata["individual"],
+                metadata["interval"],
+                batch["labels"].cpu().detach().numpy(),
+            )
+        )
+
+        return results
+
+    def _save_metadata(self, dataset: DNADataset) -> None:
+        metadata_df = dataset.metadata_df.copy()
+        metadata_df.to_csv(self.output_path / "metadata.csv")
+        logger.info(f"Saved metadata to {self.output_path / 'metadata.csv'}")
+
+    def predict_and_save(self, dataset: DNADataset) -> None:
+        self._save_metadata(dataset)
+        dataloader = self._build_dataloader(dataset)
 
         individual_to_results = defaultdict(list)
 
         with torch.no_grad():
             for batch, metadata in dataloader:
 
-                current_batch_results = self.process_one_batch(batch, metadata, mode)
+                current_batch_results = self._process_one_batch(batch, metadata)
 
                 unique_individuals = np.unique(metadata["individual"])
 
                 for individual in unique_individuals:
                     individual_to_results[individual] += list(
-                        filter(lambda x: x[1] == individual, current_batch_results)
+                        filter(lambda x: x[2] == individual, current_batch_results)
                     )
 
                 to_delete = []
                 for individual, results in individual_to_results.items():
                     if individual not in unique_individuals:
-                        self.save_results(
-                            results, "logits" if mode == "predict" else "embeddings"
-                        )
+                        results_df = self._results_to_df(results, dataset)
+                        self._save_results(results_df)
                         to_delete.append(individual)
 
                 for individual in to_delete:
                     del individual_to_results[individual]
 
-    def predict_and_save(self, dataset: Dataset):
-        self.process_and_save(dataset, mode="predict")
-
-    def embed_and_save(self, dataset: Dataset):
-        self.process_and_save(dataset, mode="embed")
-
-    def embed_n_batches(self, dataset: Dataset, n_batches: int) -> pd.DataFrame:
-        dataloader = self.build_dataloader(dataset)
+    def predict_n_batches(self, dataset: Dataset, n_batches: int) -> pd.DataFrame:
+        dataloader = self._build_dataloader(dataset)
         results = []
         with torch.no_grad():
-            for i, (batch, metadata) in enumerate(dataloader):
-                if i > n_batches:
+            for i, (batch, metadata) in enumerate(tqdm(dataloader)):
+                if i >= n_batches:
                     break
 
-                current_batch_results = self.process_one_batch(batch, metadata, "embed")
+                current_batch_results = self._process_one_batch(batch, metadata)
                 results += current_batch_results
 
-        return self.results_to_df(results, "embeddings")
+        return self._results_to_df(results, dataset)

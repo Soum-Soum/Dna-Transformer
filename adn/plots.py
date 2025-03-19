@@ -1,5 +1,9 @@
 from pathlib import Path
+from typing import Optional
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.manifold import TSNE
 
 
 def plot_trainer_logs(log_history, output_dir: Path):
@@ -56,55 +60,128 @@ def plot_trainer_logs(log_history, output_dir: Path):
     plt.savefig(output_dir / "training_metrics.png")
 
 
-from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
-import numpy as np
+def plot_tsne(
+    res_df: pd.DataFrame,
+    centroids: dict[str, np.ndarray] = {},
+    output_dir: Path = None,
+    perplexity=30,
+    n_iter=300,
+    random_state=42,
+):
+    required_columns = {"embeddings", "label_decoded", "GroupK9", "start_position"}
+    missing_columns = required_columns - set(res_df.columns)
 
+    if missing_columns:
+        raise ValueError(f"Missing required columns in dataframe: {missing_columns}")
 
-def plot_tsne(res, output_dir: Path, perplexity=30, n_iter=300, random_state=42):
-    """
-    Performs dimensionality reduction using t-SNE and displays two plots:
-    - One with color coding based on labels
-    - One with color coding based on positions
+    # Extract data
+    embeddings = np.stack(res_df["embeddings"].values)
+    labels, label_classes = pd.factorize(res_df["label_decoded"])
+    group_k9, group_k9_classes = pd.factorize(res_df["GroupK9"])
+    positions = res_df["start_position"].values  # Numeric positions
 
-    :param res: List of tuples (vector, position, label)
-    :param perplexity: t-SNE hyperparameter (size of the neighborhood)
-    :param n_iter: Number of iterations for t-SNE optimization
-    :param random_state: Seed for reproducibility
-    """
-    vecs = np.stack([r[0] for r in res])
-    labels = np.stack([r[2] for r in res])
-    positions = np.stack([r[1] for r in res])
+    assert (
+        embeddings.ndim == 2
+    ), f"Expected embeddings to be a 2D array, got shape {embeddings.shape}"
+
+    if len(centroids) != 0:
+        assert len(centroids) == len(
+            label_classes
+        ), f"Centroids length {len(centroids)} does not match label classes length {len(label_classes)}"
+        embeddings = np.concatenate([embeddings, np.stack(list(centroids.values()))])
 
     tsne = TSNE(
         n_components=2,
-        verbose=1,
         perplexity=perplexity,
         n_iter=n_iter,
         random_state=random_state,
+        verbose=1,
     )
-    tsne_results = tsne.fit_transform(vecs)
+    tsne_results = tsne.fit_transform(embeddings)
+    if len(centroids) != 0:
+        tsne_results, centroids_tsne = (
+            tsne_results[: -len(centroids)],
+            tsne_results[-len(centroids) :],
+        )
+    else:
+        centroids_tsne = None
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 5))
 
-    # First plot: color coding based on labels
-    scatter1 = ax1.scatter(
-        tsne_results[:, 0], tsne_results[:, 1], c=labels, cmap="viridis", alpha=0.6
-    )
-    plt.colorbar(scatter1, ax=ax1, label="Labels")
-    ax1.set_title("t-SNE: Color Coding by Labels")
-    ax1.set_xlabel("t-SNE 1")
-    ax1.set_ylabel("t-SNE 2")
+    plots_info = [
+        ("Labels", labels, label_classes, "Accent"),
+        ("Group K9", group_k9, group_k9_classes, "Set1"),
+        ("Position", positions, None, "plasma"),
+    ]
 
-    # Second plot: color coding based on positions
-    pos_values = positions[:, 0] if positions.ndim > 1 else positions
-    scatter2 = ax2.scatter(
-        tsne_results[:, 0], tsne_results[:, 1], c=pos_values, cmap="plasma", alpha=0.6
-    )
-    plt.colorbar(scatter2, ax=ax2, label="Position")
-    ax2.set_title("t-SNE: Color Coding by Position")
-    ax2.set_xlabel("t-SNE 1")
-    ax2.set_ylabel("t-SNE 2")
+    for ax, (title, values, classes, cmap) in zip(axes, plots_info):
+        scatter = ax.scatter(
+            tsne_results[:, 0], tsne_results[:, 1], c=values, cmap=cmap, alpha=0.6
+        )
+        plt.colorbar(scatter, ax=ax, label=title)
+        ax.set_title(f"t-SNE projection of SNP : Color Coding by {title}")
+        ax.set_xlabel("t-SNE 1")
+        ax.set_ylabel("t-SNE 2")
+
+        legend_handles = []
+
+        # Add legend for categorical variables (labels and group_k9)
+        if classes is not None:
+            unique_values = np.unique(values)
+            colormap = plt.get_cmap(cmap)
+            colors = colormap(np.linspace(0, 1, len(unique_values)))
+            legend_handles.extend(
+                [
+                    plt.Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        color="w",
+                        markerfacecolor=colors[i],
+                        markersize=10,
+                        label=classes[i],
+                    )
+                    for i in range(len(unique_values))
+                ]
+            )
+
+        if centroids_tsne is not None:
+            # Plot centroids in RED
+            ax.scatter(
+                centroids_tsne[:, 0],
+                centroids_tsne[:, 1],
+                c="#FF0000",
+                edgecolors="black",
+                marker="X",
+                s=150,
+                label="Centroids",
+            )
+            legend_handles.append(
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="X",
+                    color="w",
+                    markerfacecolor="#FF0000",
+                    markersize=12,
+                    label="Centroids",
+                )
+            )
+
+        if legend_handles:
+            ax.legend(handles=legend_handles, title=title, loc="upper right")
 
     plt.tight_layout()
-    plt.savefig(output_dir / "tsne_plot.png")
+
+    # Save or display the plot
+    if output_dir:
+        output_path = Path(output_dir) / "tsne_plot.png"
+        try:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            print(f"Plot saved to {output_path}")
+        except Exception as e:
+            print(f"Failed to save plot: {e}")
+    else:
+        plt.show()
+
+    plt.close()
