@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from tqdm.rich import tqdm
 
 from adn.data import DNADataset, data_collator
 from adn.models.bert import CustomBertForSequenceClassification
@@ -20,15 +20,11 @@ def collate_fn(features: list):
 
 class Predictor:
 
-    def __init__(self, model_path: Path, batch_size: int = 256):
-        self.model_path = model_path
-        self.output_path = self.model_path.parent.parent / "predictions"
+    def __init__(self, model: torch.nn.Module, output_dir: Path, batch_size: int = 256):
+        self.output_dir = output_dir
+        self.output_dir.mkdir(exist_ok=True, parents=True)
         self.batch_size = batch_size
-        self.model = (
-            CustomBertForSequenceClassification.from_pretrained(str(model_path))
-            .eval()
-            .cuda()
-        )
+        self.model = model.eval().cuda()
 
     def _build_dataloader(self, dataset: Dataset) -> DataLoader:
         return DataLoader(
@@ -59,7 +55,7 @@ class Predictor:
 
     def _save_results(self, results_df: pd.DataFrame) -> None:
         current_individual = results_df["individual"].iloc[0]
-        current_df_output_path = self.output_path / f"{current_individual}.parquet"
+        current_df_output_path = self.output_dir / f"{current_individual}.parquet"
 
         current_df_output_path.parent.mkdir(exist_ok=True, parents=True)
         current_embeddings_output_path = current_df_output_path.with_suffix(".npy")
@@ -102,8 +98,8 @@ class Predictor:
 
     def _save_metadata(self, dataset: DNADataset) -> None:
         metadata_df = dataset.metadata_df.copy()
-        metadata_df.to_csv(self.output_path / "metadata.csv")
-        logger.info(f"Saved metadata to {self.output_path / 'metadata.csv'}")
+        metadata_df.to_csv(self.output_dir / "metadata.csv")
+        logger.info(f"Saved metadata to {self.output_dir / 'metadata.csv'}")
 
     def predict_and_save(self, dataset: DNADataset) -> None:
         self._save_metadata(dataset)
@@ -112,7 +108,9 @@ class Predictor:
         individual_to_results = defaultdict(list)
 
         with torch.no_grad():
-            for batch, metadata in dataloader:
+            for batch, metadata in tqdm(
+                dataloader, desc="Predicting...", unit="batch", total=len(dataloader)
+            ):
 
                 current_batch_results = self._process_one_batch(batch, metadata)
 

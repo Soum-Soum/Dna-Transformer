@@ -8,7 +8,7 @@ import polars as pl
 from sklearn.utils import compute_class_weight
 import torch
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+from tqdm.rich import tqdm
 from sklearn.model_selection import train_test_split
 from transformers import PreTrainedTokenizerFast
 

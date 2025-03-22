@@ -15,24 +15,6 @@ import evaluate
 
 app = typer.Typer()
 
-def get_predictions(
-    model: CustomBertForSequenceClassification, 
-    eval_dl: DataLoader, 
-    max_batches: Optional[int] = None
-) -> list:
-    res = []
-    with torch.no_grad():
-        for i, batch in enumerate(tqdm(eval_dl)):
-            batch = {k: v.cuda() for k, v in batch.items()}
-            labels = batch.pop("labels").cpu().detach().numpy()
-            preds = model.predict(**batch)[0]
-            embeddings = preds.pooler_output.cpu().detach().numpy()
-            positions = batch["chromosome_positions"].cpu().detach().numpy()
-            res += list(zip(embeddings, positions, labels))
-            if max_batches and i > max_batches:
-                break
-    return res
-
 @app.command()
 def train_model(
     individuals_snp_dir: str = typer.Option(..., help="Directory containing individuals SNPs."),
@@ -126,13 +108,6 @@ def train_model(
     trainer.train()
 
     plot_trainer_logs(trainer.state.log_history, output_dir)
-
-    eval_data_loader = DataLoader(
-        eval_ds, batch_size=32, collate_fn=data_collator, num_workers=4
-    )
-    predictions = get_predictions(model, eval_data_loader, max_batches=100)
-
-    plot_tsne(res=predictions, output_dir=output_dir)
 
 if __name__ == "__main__":
     app()
