@@ -18,6 +18,10 @@ def collate_fn(features: list):
     return predictions_batch, {"individual": individuals, "interval": intervals}
 
 
+def compute_ennergy_score(logits: torch.Tensor) -> torch.Tensor:
+    return -torch.log(torch.sum(torch.exp(logits), dim=1))
+
+
 class Predictor:
 
     def __init__(self, model: torch.nn.Module, output_dir: Path, batch_size: int = 256):
@@ -37,7 +41,15 @@ class Predictor:
 
     def _results_to_df(self, results: list, ds: DNADataset) -> pd.DataFrame:
         df = pd.DataFrame(
-            results, columns=["logits", "embeddings", "individual", "interval", "label"]
+            results,
+            columns=[
+                "logits",
+                "ennergy_scores",
+                "embeddings",
+                "individual",
+                "interval",
+                "label",
+            ],
         )
         df["label_decoded"] = df["label"].apply(lambda x: ds.id_to_label[x])
         df["start_position"] = df["interval"].apply(lambda x: int(x[0]))
@@ -82,11 +94,16 @@ class Predictor:
             .numpy()
         )
 
+        ennergy_scores = (
+            compute_ennergy_score(classifier_outputs.logits).cpu().detach().numpy()
+        )
+
         embeddings = embeddings_outputs.pooler_output.cpu().detach().numpy()
 
         results = list(
             zip(
                 logits,
+                ennergy_scores,
                 embeddings,
                 metadata["individual"],
                 metadata["interval"],
@@ -118,7 +135,7 @@ class Predictor:
 
                 for individual in unique_individuals:
                     individual_to_results[individual] += list(
-                        filter(lambda x: x[2] == individual, current_batch_results)
+                        filter(lambda x: x[3] == individual, current_batch_results)
                     )
 
                 to_delete = []
