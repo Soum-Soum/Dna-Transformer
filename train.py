@@ -7,7 +7,7 @@ import numpy as np
 from adn.data import DatasetMode, data_collator, load_datasets
 from adn.plots import plot_trainer_logs, plot_tsne
 from adn.tokenizer import get_tokenizer
-from adn.models.bert import CustomBertForSequenceClassification
+from adn.models.bert import DnaBertConfig, DnaBertForSequenceClassification
 from transformers import BertConfig, Trainer, TrainingArguments
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -15,21 +15,34 @@ import evaluate
 
 app = typer.Typer()
 
+
 @app.command()
 def train_model(
-    individuals_snp_dir: str = typer.Option(..., help="Directory containing individuals SNPs."),
+    individuals_snp_dir: str = typer.Option(
+        ..., help="Directory containing individuals SNPs."
+    ),
     metadata_path: str = typer.Option(..., help="Path to metadata file."),
     output_dir: str = typer.Option(..., help="Directory to save model checkpoints."),
     run_name: str = typer.Option(..., help="Name of the run."),
-    sequence_per_individual: int = typer.Option(250, help="Number of sequences per individual."),
+    sequence_per_individual: int = typer.Option(
+        250, help="Number of sequences per individual."
+    ),
     sequence_length: int = typer.Option(128, help="Length of each sequence."),
-    train_eval_split: float = typer.Option(0.1, help="Proportion of dataset for evaluation."),
+    train_eval_split: float = typer.Option(
+        0.1, help="Proportion of dataset for evaluation."
+    ),
     epochs: int = typer.Option(20, help="Number of training epochs."),
     batch_size: int = typer.Option(256, help="Batch size for training and evaluation."),
     learning_rate: float = typer.Option(1e-3, help="Learning rate for training."),
-    labels_to_remove: Optional[str] = typer.Option(None, help="Labels to remove from metadata."),
-    checkpoint_dir: Optional[str] = typer.Option(None, help="Path to a checkpoint to resume training from."),
-    individuals_to_ignore: Optional[str] = typer.Option(None, help="List of individuals to ignore during training."),
+    labels_to_remove: Optional[str] = typer.Option(
+        None, help="Labels to remove from metadata."
+    ),
+    checkpoint_dir: Optional[str] = typer.Option(
+        None, help="Path to a checkpoint to resume training from."
+    ),
+    individuals_to_ignore: Optional[str] = typer.Option(
+        None, help="List of individuals to ignore during training."
+    ),
 ):
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
@@ -47,25 +60,27 @@ def train_model(
     )
 
     dim = 256
-    config = BertConfig(
+    config = DnaBertConfig(
         vocab_size=train_ds.tokenizer.vocab_size,
         hidden_size=dim,
         intermediate_size=4 * dim,
         num_attention_heads=8,
         num_labels=len(train_ds.label_to_id),
         position_embedding_type="absolute",
+        class_weights=train_ds.class_weights.tolist(),
+        activation_shaping=True,
+        activation_shaping_pruning_level=0.8,
     )
 
     if checkpoint_dir is None:
-        model = CustomBertForSequenceClassification(
+        model = DnaBertForSequenceClassification(
             config, class_weights=train_ds.class_weights
         )
     else:
-        model = CustomBertForSequenceClassification.from_pretrained(
+        model = DnaBertForSequenceClassification.from_pretrained(
             checkpoint_dir,
             config=config,
             ignore_mismatched_sizes=True,
-            class_weights=train_ds.class_weights,
         )
 
     training_args = TrainingArguments(
@@ -108,6 +123,7 @@ def train_model(
     trainer.train()
 
     plot_trainer_logs(trainer.state.log_history, output_dir)
+
 
 if __name__ == "__main__":
     app()

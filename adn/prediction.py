@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.rich import tqdm
 
 from adn.data import DNADataset, data_collator
-from adn.models.bert import CustomBertForSequenceClassification
+from adn.models.bert import DnaBertForSequenceClassification
 
 
 def collate_fn(features: list):

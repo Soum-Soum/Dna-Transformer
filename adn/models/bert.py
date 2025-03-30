@@ -1,19 +1,36 @@
 from typing import Optional
+from loguru import logger
 from transformers.models.bert.modeling_bert import (
     BertEmbeddings,
     BertForSequenceClassification,
     BaseModelOutputWithPoolingAndCrossAttentions,
     SequenceClassifierOutput,
     BertConfig,
+    BertPooler,
 )
 import torch
 from torch import nn
 
 
-class CustomBertEmbeddings(BertEmbeddings):
+class DnaBertConfig(BertConfig):
+
+    def __init__(
+        self,
+        activation_shaping: bool = False,
+        activation_shaping_pruning_level: float = 0.5,
+        class_weights: Optional[list[float]] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.activation_shaping = activation_shaping
+        self.activation_shaping_pruning_level = activation_shaping_pruning_level
+        self.class_weights = class_weights
+
+
+class DnaBertEmbeddings(BertEmbeddings):
     """Construct the embeddings from word, position and token_type embeddings."""
 
-    def __init__(self, config):
+    def __init__(self, config: BertConfig):
         super().__init__(config)
         self.chromosome_position_embeddings = nn.Linear(1, config.hidden_size)
 
@@ -75,15 +92,73 @@ class CustomBertEmbeddings(BertEmbeddings):
         return embeddings
 
 
-class CustomBertForSequenceClassification(BertForSequenceClassification):
-    def __init__(self, config: BertConfig, class_weights: Optional[list[float]] = None):
+class ActivationShapingS(torch.nn.Module):
+
+    def __init__(self, pruning_level: float, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pruning_level = pruning_level
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, hidden_size = inputs.shape
+        fattened = inputs.reshape((batch_size, -1))
+        sum_1 = torch.sum(fattened, dim=1)
+
+        percentile = (
+            torch.quantile(fattened, self.pruning_level, dim=-1)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(-1, seq_len, hidden_size)
+        )
+        x_with_zeros = torch.where(
+            inputs > percentile, inputs, torch.zeros_like(inputs)
+        )
+        sum_2 = torch.sum(x_with_zeros.reshape((batch_size, -1)), dim=1)
+
+        # Avoid division by zero
+        exp_ratio = (
+            torch.exp(sum_1 / (sum_2 + 1e-6))
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(-1, seq_len, hidden_size)
+        )
+
+        return x_with_zeros * exp_ratio
+
+
+class ActivationShapingBertPooler(BertPooler):
+
+    def __init__(self, config: DnaBertConfig):
         super().__init__(config)
-        self.custom_embed = CustomBertEmbeddings(config)
+        if config.activation_shaping:
+            logger.info(
+                f"Using activation shaping with pruning level {config.activation_shaping_pruning_level}"
+            )
+            self.activation_shaping = ActivationShapingS(
+                pruning_level=config.activation_shaping_pruning_level
+            )
+        else:
+            self.activation_shaping = None
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = hidden_states[:, :1]
+        if self.activation_shaping is not None:
+            hidden_states = self.activation_shaping(hidden_states)
+
+        return super().forward(hidden_states)
+
+
+class DnaBertForSequenceClassification(BertForSequenceClassification):
+    def __init__(self, config: DnaBertConfig):
+        super().__init__(config)
+        self.custom_embed = DnaBertEmbeddings(config)
+
+        # Patch the BERT model to ActivationShaping (if set in the config)
+        self.bert.pooler = ActivationShapingBertPooler(config)
 
         # Convert class_weights to tensor if provided
         self.class_weights = (
-            torch.tensor(class_weights, dtype=torch.float32)
-            if class_weights is not None
+            torch.tensor(config.class_weights, dtype=torch.float32)
+            if config.class_weights is not None
             else torch.tensor([1.0] * config.num_labels, dtype=torch.float32)
         )
 

@@ -5,7 +5,7 @@ from tqdm import tqdm
 import typer
 
 from adn.data import DatasetMode, load_datasets
-from adn.models.bert import CustomBertForSequenceClassification
+from adn.models.bert import DnaBertForSequenceClassification
 from adn.prediction import Predictor
 
 
@@ -48,7 +48,7 @@ def predict(
         overlaping_ratio=overlaping_ratio,
     )
 
-    model = CustomBertForSequenceClassification.from_pretrained(checkpoint_dir)
+    model = DnaBertForSequenceClassification.from_pretrained(checkpoint_dir)
 
     predictor = Predictor(
         model=model,
