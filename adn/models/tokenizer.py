@@ -42,8 +42,6 @@ def get_vocabulary_dict() -> dict[str, int]:
     }
     for pair in sorted(DNA_PAIRS):
         for pair2 in sorted(DNA_PAIRS):
-            if pair == pair2:
-                continue
             token_to_id[pair + pair2] = len(token_to_id)
 
     return token_to_id

@@ -1,27 +1,24 @@
 from typing import Optional
 import typer
 from pathlib import Path
-from loguru import logger
 import torch
 import numpy as np
-from adn.data import DatasetMode, data_collator, load_datasets
-from adn.plots import plot_trainer_logs, plot_tsne
-from adn.tokenizer import get_tokenizer
+from adn.data.data import DatasetMode, data_collator, load_datasets
+from adn.plots import plot_trainer_logs
 from adn.models.bert import DnaBertConfig, DnaBertForSequenceClassification
-from transformers import BertConfig, Trainer, TrainingArguments
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from transformers import Trainer, TrainingArguments
 import evaluate
+
+from adn.utils.paths_utils import PathHelper
 
 app = typer.Typer()
 
 
 @app.command()
 def train_model(
-    individuals_snp_dir: str = typer.Option(
-        ..., help="Directory containing individuals SNPs."
+    base_dir: Path = typer.Option(
+        ..., help="Base data directory containing the dataset."
     ),
-    metadata_path: str = typer.Option(..., help="Path to metadata file."),
     output_dir: str = typer.Option(..., help="Directory to save model checkpoints."),
     run_name: str = typer.Option(..., help="Name of the run."),
     sequence_per_individual: int = typer.Option(
@@ -48,8 +45,7 @@ def train_model(
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
 
     train_ds, eval_ds = load_datasets(
-        individuals_snp_dir=Path(individuals_snp_dir),
-        metadata_path=Path(metadata_path),
+        path_helper=PathHelper(base_dir),
         sequence_per_individual=sequence_per_individual,
         sequence_length=sequence_length,
         train_eval_split=train_eval_split,

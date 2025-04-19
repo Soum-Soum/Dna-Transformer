@@ -7,23 +7,24 @@ import pandas as pd
 import polars as pl
 from sklearn.utils import compute_class_weight
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from tqdm.rich import tqdm
 from sklearn.model_selection import train_test_split
 from transformers import PreTrainedTokenizerFast
 
-from adn.tokenizer import get_tokenizer
+from adn.models.tokenizer import get_tokenizer
+from adn.utils.paths_utils import PathHelper
 
 labels = {"XI", "GJ", "cA"}
 
 
-def load_dataframes(
-    individuals_snp_dir: Path, individuals: list[str]
+def load_snp_per_individual(
+    path_helper: PathHelper, individuals: list[str]
 ) -> dict[str, pl.DataFrame]:
     snp_parquet_files = list(
         filter(
             lambda x: x.stem in individuals,
-            individuals_snp_dir.glob("*.parquet"),
+            path_helper.list_snps_per_individual_paths,
         )
     )
     iterrable = tqdm(snp_parquet_files, desc="Loading SNP data...")
@@ -32,7 +33,7 @@ def load_dataframes(
 
 
 def load_metadata(
-    metadata_path: Path,
+    path_helper: PathHelper,
     labels_to_remove: Optional[str],
     data_ratio_to_use: float,
     individual_to_ignore: Optional[str],
@@ -44,7 +45,7 @@ def load_metadata(
     else:
         label_to_use = labels
 
-    metadata = pd.read_csv(metadata_path, sep="\t")
+    metadata = pd.read_csv(path_helper.metadata_file_path, sep="\t")
     metadata = metadata[metadata["GroupK4"].isin(label_to_use)]
     if individual_to_ignore:
         individuals_to_ignore = load_individuals_to_ignore(individual_to_ignore)
@@ -73,8 +74,7 @@ class DatasetMode:
 
 
 def load_datasets(
-    individuals_snp_dir: Path,
-    metadata_path: Path,
+    path_helper: PathHelper,
     train_eval_split: float,
     sequence_length: int,
     mode: DatasetMode,
@@ -85,11 +85,11 @@ def load_datasets(
     individual_to_ignore: Optional[str] = None,
 ) -> tuple["DNADataset", Optional["DNADataset"]]:
     metadata = load_metadata(
-        metadata_path, labels_to_remove, data_ratio_to_use, individual_to_ignore
+        path_helper, labels_to_remove, data_ratio_to_use, individual_to_ignore
     ).set_index("individual")
     individuals = metadata.index.to_list()
-    dataframes = load_dataframes(individuals_snp_dir, individuals)
-    max_position = compute_max_position(dataframes)
+    snp_per_individual = load_snp_per_individual(path_helper, individuals)
+    max_position = compute_max_position(snp_per_individual)
 
     if train_eval_split != 0:
         train_metadata, test_metadata, _, _ = train_test_split(
@@ -132,12 +132,13 @@ def load_datasets(
     else:
         raise ValueError(f"Unknown mode: {mode}, expected 'random' or 'sequential'")
 
-    train_dataframes = {
-        individual: dataframes[individual] for individual in train_metadata.index
+    train_snps = {
+        individual: snp_per_individual[individual]
+        for individual in train_metadata.index
     }
 
     train_dataset = selected_ds_class(
-        metadata_df=train_metadata, dataframes=train_dataframes, **kwargs
+        metadata_df=train_metadata, snp_per_individual=train_snps, **kwargs
     )
     logger.info(
         f"Train dataset loaded with {len(train_dataset.metadata_df)} individuals"
@@ -146,12 +147,12 @@ def load_datasets(
     if test_metadata is None:
         return train_dataset, None
 
-    test_dataframes = {
-        individual: dataframes[individual] for individual in test_metadata.index
+    test_snps = {
+        individual: snp_per_individual[individual] for individual in test_metadata.index
     }
 
     test_dataset = selected_ds_class(
-        metadata_df=test_metadata, dataframes=test_dataframes, **kwargs
+        metadata_df=test_metadata, snp_per_individual=test_snps, **kwargs
     )
     logger.info(f"Test dataset loaded with {len(test_dataset.metadata_df)} individuals")
 
@@ -176,7 +177,8 @@ class DNADataset(Dataset):
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        dataframes: dict[str, pl.DataFrame],
+        snp_per_individual: dict[str, pl.DataFrame],
+        reference_genome: pl.DataFrame,
         max_position: int,
         label_to_id: dict[str, int],
         tokenizer: PreTrainedTokenizerFast,
@@ -184,7 +186,8 @@ class DNADataset(Dataset):
         super().__init__()
         self.metadata_df = metadata_df
         self.individuals = sorted(self.metadata_df.index.to_list())
-        self.dataframes = dataframes
+        self.snp_per_individual = snp_per_individual
+        self.reference_genome = reference_genome
         self.max_position = max_position
         self.label_to_id = label_to_id
         self.tokenizer = tokenizer
@@ -201,7 +204,38 @@ class DNADataset(Dataset):
             y=self.metadata_df["GroupK4"],
         )
 
-    def _prepare_sequence(self, sub_df, individual):
+    def _prepare_sequence_v1(self, sub_df: pl.DataFrame, individual: str) -> dict:
+        sequence_position = sub_df["position"].to_numpy().astype(np.float32)
+        scaled_sequence_position = (sequence_position / self.max_position).tolist()
+        # Duplicate start and end positions to match with BOS and EOS tokens
+        scaled_sequence_position = (
+            [scaled_sequence_position[0]]
+            + scaled_sequence_position
+            + [scaled_sequence_position[-1]]
+        )
+
+        sequence = (
+            sub_df[["main_allele", "allele"]]
+            .map_rows(lambda x: "".join(x))
+            .to_numpy()
+            .squeeze()
+            .tolist()
+        )
+        sequence = " ".join(sequence)
+        sequence = self.tokenizer.encode(sequence)
+
+        label = self.metadata_df.loc[individual, "GroupK4"]
+        label_id = self.label_to_id[label]
+
+        return {
+            "input_ids": sequence,
+            "labels": label_id,
+            "chromosome_positions": scaled_sequence_position,
+            "interval": (sequence_position[0], sequence_position[-1]),
+            "individual": individual,
+        }
+
+    def _prepare_sequence_v2(self, sub_df: pl.DataFrame, individual: str):
         sequence_position = sub_df["position"].to_numpy().astype(np.float32)
         scaled_sequence_position = (sequence_position / self.max_position).tolist()
         # Duplicate start and end positions to match with BOS and EOS tokens
@@ -246,7 +280,7 @@ class FixedLenDNADataset(DNADataset):
     ):
         super().__init__(
             metadata_df=metadata_df,
-            dataframes=dataframes,
+            snp_per_individual=dataframes,
             max_position=max_position,
             label_to_id=label_to_id,
             tokenizer=tokenizer,
@@ -281,7 +315,7 @@ class RandomFixedLenDNADataset(FixedLenDNADataset):
 
     def __getitem__(self, idx):
         individual = np.random.choice(self.individuals)
-        df = self.dataframes[individual]
+        df = self.snp_per_individual[individual]
         snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
         sub_df = df[snp_idx : snp_idx + self.sequence_length]
 
@@ -315,13 +349,13 @@ class SequentialFixedLenDNADataset(FixedLenDNADataset):
     def __len__(self):
         count = 0
         for individual in self.individuals:
-            count += self.dataframes[individual].shape[0] // int(
+            count += self.snp_per_individual[individual].shape[0] // int(
                 self.sequence_length * (1 - self.overlaping_ratio)
             )
         return count
 
     def __getitem__(self, idx):
-        df = self.dataframes[self.current_individual]
+        df = self.snp_per_individual[self.current_individual]
         if self.current_position + self.sequence_length >= df.shape[0]:
             next_individual_idx = self.individuals.index(self.current_individual) + 1
 
@@ -334,7 +368,7 @@ class SequentialFixedLenDNADataset(FixedLenDNADataset):
                 f"Switching to individual {next_individual_idx} : {self.current_individual}"
             )
 
-            df = self.dataframes[self.current_individual]
+            df = self.snp_per_individual[self.current_individual]
 
         sub_df = df[
             self.current_position : self.current_position + self.sequence_length
