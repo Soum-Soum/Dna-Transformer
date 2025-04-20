@@ -9,7 +9,10 @@ from adn.utils.paths_utils import PathHelper
 app = typer.Typer()
 
 
-@app.command()
+@app.command(
+    name="hapmap-to-parquet",
+    help="Convert one big hapmap file to multiple small parquet files",
+)
 def hapmap_to_parquet(
     hapmap_path: Path = typer.Option(..., help="Path to the hapmap file"),
     output_dir: Path = typer.Option(..., help="Output directory"),

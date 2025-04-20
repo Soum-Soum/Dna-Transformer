@@ -1,5 +1,6 @@
 from concurrent.futures import ProcessPoolExecutor
 import functools
+import math
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -37,10 +38,51 @@ def extract_spn(row: pd.Series, individuals: list[str]):
     return diff
 
 
+def filter_on_missing_data(
+    chunk: pd.DataFrame,
+    individuals: list[str],
+    max_missing_data_percent: float,
+) -> pd.DataFrame:
+    before_len = len(chunk)
+    missing_data_count = chunk[individuals].isna().sum(axis=1)
+    missing_data_count += (chunk[individuals] == "NN").sum(axis=1)
+    threshold = math.ceil(
+        (max_missing_data_percent / 100) * len(individuals)
+    )  # Calculate the threshold
+    chunk = chunk[missing_data_count <= threshold]
+
+    logger.info(
+        f"Filtered based on missing data: before {before_len}, after {len(chunk)}"
+    )
+    return chunk
+
+
+def filter_on_heterozygous_rate(
+    chunk: pd.DataFrame,
+    individuals: list[str],
+    max_heterozygous_percent: float,
+) -> pd.DataFrame:
+    before_len = len(chunk)
+    not_heterozygous_count = (
+        chunk[individuals].isin(["AA", "TT", "CC", "GG"]).sum(axis=1)
+    )
+    heterozygous_count = len(individuals) - not_heterozygous_count
+    threshold = math.ceil(
+        (max_heterozygous_percent / 100) * len(individuals)
+    )  # Calculate the threshold
+    chunk = chunk[heterozygous_count <= threshold]
+    logger.info(
+        f"Filtered based on heterozygous rate: before {before_len}, after {len(chunk)}"
+    )
+    return chunk
+
+
 def process_one_chunk(
     chunk: pd.DataFrame,
     path_helper: PathHelper,
     individuals: list[str],
+    max_missing_data_percent: float,
+    max_heterozygous_percent: float,
 ):
 
     start_index = chunk.index[0]
@@ -53,6 +95,17 @@ def process_one_chunk(
     )
     if current_chunk_output_path.exists():
         return
+
+    chunk = filter_on_missing_data(
+        chunk,
+        individuals,
+        max_missing_data_percent,
+    )
+    chunk = filter_on_heterozygous_rate(
+        chunk,
+        individuals,
+        max_heterozygous_percent,
+    )
     chunk["main_allele"] = chunk[individuals].mode(axis=1)
     res = chunk.apply(lambda row: extract_spn(row, individuals), axis=1)
     res = pd.concat(res.tolist())
@@ -109,27 +162,27 @@ app = typer.Typer()
 
 
 @app.command(
-    name="hapmap-to-spn",
+    name="hapmap-to-snp",
     help="Convert hapmap file to SPN format",
 )
-def hapmap_to_spn(
+def hapmap_to_snp(
     metadata_path: Path = typer.Option(..., help="Path to the metadata file"),
-    output_path: Path = typer.Option(..., help="Path to the output directory"),
+    base_dir: Path = typer.Option(..., help="Path to the output directory"),
     limit: int = typer.Option(
         None, help="Limit the number of rows to process (for testing purposes)"
     ),
     max_workers: int = typer.Option(
         10, help="Number of workers for processing chunks in parallel"
     ),
-    # max_missing_data_percent: float = typer.Option(
-    #     0.1, "the percent of missing data allowed for one SNP"
-    # ),
-    # max_heterozygous_percent: float = typer.Option(
-    #     5, "the percent of heterozygous data allowed for one SNP"
-    # ),
+    max_missing_data_percent: float = typer.Option(
+        1, help="the percent of missing data allowed for one SNP"
+    ),
+    max_heterozygous_percent: float = typer.Option(
+        5, help="the percent of heterozygous data allowed for one SNP"
+    ),
 ):
 
-    path_helper = PathHelper(output_path)
+    path_helper = PathHelper(base_dir)
 
     metadata_df = pd.read_csv(metadata_path, sep="\t")
     metadata_df.to_csv(path_helper.metadata_file_path)
@@ -144,6 +197,8 @@ def hapmap_to_spn(
         process_one_chunk,
         path_helper=path_helper,
         individuals=individuals,
+        max_missing_data_percent=max_missing_data_percent,
+        max_heterozygous_percent=max_heterozygous_percent,
     )
 
     row_count = 0
