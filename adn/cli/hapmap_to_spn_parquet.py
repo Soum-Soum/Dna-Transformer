@@ -70,7 +70,7 @@ def aggregate_chunks(
 ):
     parquets_files = path_helper.list_chunks_paths
     it = tqdm(list(parquets_files), desc="Aggregating chunks", unit="chunk")
-    snp_df = pl.concat([pl.read_parquet(file) for file in it])])
+    snp_df = pl.concat([pl.read_parquet(file) for file in it])
     snp_df = snp_df.rename(mapping={"__index_level_0__": "individual"})
     snp_df.write_parquet(path_helper.all_snp_file_path)
     logger.info(f"Saving all SNPs in {path_helper.all_snp_file_path}")
@@ -80,10 +80,12 @@ def aggregate_reference_genome(
     path_helper: PathHelper,
 ):
     parquets_files = path_helper.list_main_alleles_paths
-    it = tqdm(list(parquets_files), desc="Aggregating main alleles as reference genome", unit="chunk")
-    main_allele_df = pl.concat(
-        [pl.read_parquet(file) for file in it],
+    it = tqdm(
+        list(parquets_files),
+        desc="Aggregating main alleles as reference genome",
+        unit="chunk",
     )
+    main_allele_df = pl.concat([pl.read_parquet(file) for file in it])
     main_allele_df = main_allele_df.sort("position")
     main_allele_df.write_parquet(path_helper.all_main_alleles_file_path)
     logger.info(
@@ -112,7 +114,6 @@ app = typer.Typer()
 )
 def hapmap_to_spn(
     metadata_path: Path = typer.Option(..., help="Path to the metadata file"),
-    hapmap_path: Path = typer.Option(..., help="Path to the hapmap file"),
     output_path: Path = typer.Option(..., help="Path to the output directory"),
     limit: int = typer.Option(
         None, help="Limit the number of rows to process (for testing purposes)"
@@ -120,6 +121,12 @@ def hapmap_to_spn(
     max_workers: int = typer.Option(
         10, help="Number of workers for processing chunks in parallel"
     ),
+    # max_missing_data_percent: float = typer.Option(
+    #     0.1, "the percent of missing data allowed for one SNP"
+    # ),
+    # max_heterozygous_percent: float = typer.Option(
+    #     5, "the percent of heterozygous data allowed for one SNP"
+    # ),
 ):
 
     path_helper = PathHelper(output_path)
@@ -133,28 +140,25 @@ def hapmap_to_spn(
 
     path_helper.setup_output_dirs()
 
-    # process_one_chunk_partial = functools.partial(
-    #     process_one_chunk,
-    #     path_helper=path_helper,
-    #     individuals=individuals,
-    # )
+    process_one_chunk_partial = functools.partial(
+        process_one_chunk,
+        path_helper=path_helper,
+        individuals=individuals,
+    )
 
-    # row_count = 0
-    # for chunk in tqdm(
-    #     pd.read_csv(hapmap_path, sep="\t", chunksize=5000),
-    #     desc="Chunks processing...",
-    #     unit="chunk",
-    # ):
-    #     logger.info(f"Processing chunk position: {chunk.index[0]}-{chunk.index[-1]}")
-    #     process_pool.submit(process_one_chunk_partial, chunk)
-    #     # process_one_chunk_partial(chunk)
+    row_count = 0
+    for chunk_path in tqdm(path_helper.list_raw_chunks_paths):
+        chunk = pd.read_parquet(chunk_path)
+        logger.info(f"Processing chunk position: {chunk.index[0]}-{chunk.index[-1]}")
+        process_pool.submit(process_one_chunk_partial, chunk)
+        # process_one_chunk_partial(chunk)
 
-    #     row_count += chunk.shape[0]
-    #     if limit is not None and row_count >= limit:
-    #         logger.info(f"Limit reached: {row_count} >= {limit} -> Stopping")
-    #         break
+        row_count += chunk.shape[0]
+        if limit is not None and row_count >= limit:
+            logger.info(f"Limit reached: {row_count} >= {limit} -> Stopping")
+            break
 
-    # process_pool.shutdown(wait=True)
+    process_pool.shutdown(wait=True)
 
     aggregate_chunks(path_helper)
     aggregate_reference_genome(path_helper)

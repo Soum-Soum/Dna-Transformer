@@ -55,6 +55,12 @@ def load_metadata(
     return metadata
 
 
+def load_ref_genome(path_helper: PathHelper) -> pl.DataFrame:
+    reference_genome = pl.read_parquet(path_helper.all_main_alleles_file_path)
+    reference_genome = reference_genome.sort("position")
+    return reference_genome
+
+
 def compute_max_position(dataframes: dict[str, pl.DataFrame]) -> int:
     max_position = 0
     for _, df in dataframes.items():
@@ -90,6 +96,7 @@ def load_datasets(
     individuals = metadata.index.to_list()
     snp_per_individual = load_snp_per_individual(path_helper, individuals)
     max_position = compute_max_position(snp_per_individual)
+    reference_genome = load_ref_genome(path_helper)
 
     if train_eval_split != 0:
         train_metadata, test_metadata, _, _ = train_test_split(
@@ -113,6 +120,7 @@ def load_datasets(
         "max_position": max_position,
         "label_to_id": label_to_id,
         "tokenizer": dna_tokenizer,
+        "reference_genome": reference_genome,
     }
 
     if mode == DatasetMode.RANDOM_FIXED_LEN:
