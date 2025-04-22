@@ -1,5 +1,7 @@
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 import functools
+import random
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -29,7 +31,9 @@ def load_snp_per_individual(
         )
     )
     iterrable = tqdm(snp_parquet_files, desc="Loading SNP data...")
-    dataframes = {file.stem: pl.read_parquet(file) for file in iterrable}
+    dataframes = {
+        file.stem: pl.read_parquet(file, use_pyarrow=True) for file in iterrable
+    }
     return dataframes
 
 
@@ -57,9 +61,9 @@ def load_metadata(
 
 
 def load_ref_genome(path_helper: PathHelper) -> pl.DataFrame:
-    reference_genome = pl.read_parquet(path_helper.all_main_alleles_file_path)
-    reference_genome = reference_genome.sort("position")
-    return reference_genome
+    reference_genome = pd.read_parquet(path_helper.all_main_alleles_file_path)
+    reference_genome = reference_genome.sort_values("position").reset_index(drop=True)
+    return pl.from_pandas(reference_genome)
 
 
 def compute_max_position(dataframes: dict[str, pl.DataFrame]) -> int:
@@ -94,10 +98,6 @@ def load_datasets(
     metadata = load_metadata(
         path_helper, labels_to_remove, data_ratio_to_use, individual_to_ignore
     ).set_index("individual")
-    individuals = metadata.index.to_list()
-    snp_per_individual = load_snp_per_individual(path_helper, individuals)
-    max_position = compute_max_position(snp_per_individual)
-    reference_genome = load_ref_genome(path_helper)
 
     if train_eval_split != 0:
         train_metadata, test_metadata, _, _ = train_test_split(
@@ -115,13 +115,10 @@ def load_datasets(
     label_to_id = {
         label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())
     }
-    # dna_tokenizer = get_tokenizer()
 
     kwargs = {
-        "max_position": max_position,
+        "path_helper": path_helper,
         "label_to_id": label_to_id,
-        # "tokenizer": dna_tokenizer,
-        "reference_genome": reference_genome,
         "sequence_length": sequence_length,
     }
 
@@ -140,14 +137,7 @@ def load_datasets(
     else:
         raise ValueError(f"Unknown mode: {mode}, expected 'random' or 'sequential'")
 
-    train_snps = {
-        individual: snp_per_individual[individual]
-        for individual in train_metadata.index
-    }
-
-    train_dataset = selected_ds_class(
-        metadata_df=train_metadata, snp_per_individual=train_snps, **kwargs
-    )
+    train_dataset = selected_ds_class(metadata_df=train_metadata, **kwargs)
     logger.info(
         f"Train dataset loaded with {len(train_dataset.metadata_df)} individuals"
     )
@@ -155,13 +145,7 @@ def load_datasets(
     if test_metadata is None:
         return train_dataset, None
 
-    test_snps = {
-        individual: snp_per_individual[individual] for individual in test_metadata.index
-    }
-
-    test_dataset = selected_ds_class(
-        metadata_df=test_metadata, snp_per_individual=test_snps, **kwargs
-    )
+    test_dataset = selected_ds_class(metadata_df=test_metadata, **kwargs)
     logger.info(f"Test dataset loaded with {len(test_dataset.metadata_df)} individuals")
 
     return train_dataset, test_dataset
@@ -194,19 +178,17 @@ class DNADataset(Dataset):
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        snp_per_individual: dict[str, pl.DataFrame],
-        reference_genome: pl.DataFrame,
+        path_helper: PathHelper,
         sequence_length: int,
-        max_position: int,
         label_to_id: dict[str, int],
     ):
         super().__init__()
         self.metadata_df = metadata_df
         self.individuals = sorted(self.metadata_df.index.to_list())
-        self.snp_per_individual = snp_per_individual
-        self.reference_genome = reference_genome
+        self.snp_per_individual = load_snp_per_individual(path_helper, self.individuals)
+        self.reference_genome = load_ref_genome(path_helper)
         self.sequence_length = sequence_length
-        self.max_position = max_position
+        self.max_position = self.reference_genome["position"].max()
         self.label_to_id = label_to_id
 
     @property
@@ -272,26 +254,19 @@ class DNADataset(Dataset):
         return self._prepare_sequence_v1(sub_ref_updated, individual)
 
 
-import random
-
-
 class RandomFixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        snp_per_individual: dict[str, pl.DataFrame],
-        reference_genome: pl.DataFrame,
-        max_position: int,
+        path_helper: PathHelper,
         label_to_id: dict[str, int],
         sequence_length: int,
         sequence_per_individual: int,
     ):
         super().__init__(
             metadata_df=metadata_df,
-            snp_per_individual=snp_per_individual,
-            reference_genome=reference_genome,
-            max_position=max_position,
+            path_helper=path_helper,
             label_to_id=label_to_id,
             sequence_length=sequence_length,
         )
@@ -313,21 +288,15 @@ class SequentialFixedLenDNADataset(DNADataset):
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        snp_per_individual: dict[str, pl.DataFrame],
-        reference_genome: pl.DataFrame,
-        max_position: int,
+        path_helper: PathHelper,
         label_to_id: dict[str, int],
-        # tokenizer: PreTrainedTokenizerFast,
         sequence_length: int,
         overlaping_ratio: float,
     ):
         super().__init__(
             metadata_df=metadata_df,
-            snp_per_individual=snp_per_individual,
-            reference_genome=reference_genome,
-            max_position=max_position,
+            path_helper=path_helper,
             label_to_id=label_to_id,
-            # tokenizer=tokenizer,
             sequence_length=sequence_length,
         )
         self.overlaping_ratio = overlaping_ratio
@@ -341,28 +310,6 @@ class SequentialFixedLenDNADataset(DNADataset):
                 self.sequence_length * (1 - self.overlaping_ratio)
             )
         return count
-
-    # def __getitem__(self, idx):
-    #     df = self.snp_per_individual[self.current_individual]
-    #     if self.current_position + self.sequence_length >= df.shape[0]:
-    #         next_individual_idx = self.individuals.index(self.current_individual) + 1
-
-    #         if next_individual_idx >= len(self.individuals):
-    #             raise StopIteration("End of dataset reached")
-
-    #         self.current_individual = self.individuals[next_individual_idx]
-    #         self.current_position = 0
-    #         logger.info(
-    #             f"Switching to individual {next_individual_idx} : {self.current_individual}"
-    #         )
-
-    #         df = self.snp_per_individual[self.current_individual]
-
-    #     sub_df = df[
-    #         self.current_position : self.current_position + self.sequence_length
-    #     ]
-    #     self.current_position += int(self.sequence_length * (1 - self.overlaping_ratio))
-    #     return self._prepare_sequence_v1(sub_df, self.current_individual)
 
     def __getitem__(self, idx):
         df = self.snp_per_individual[self.current_individual]

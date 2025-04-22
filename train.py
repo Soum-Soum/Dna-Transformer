@@ -93,7 +93,7 @@ def train_model(
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         warmup_ratio=0.05,
-        # dataloader_num_workers=8,
+        dataloader_num_workers=8,
         fp16=True,
         optim="adamw_torch_fused",
         remove_unused_columns=False,
