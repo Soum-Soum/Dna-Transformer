@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import functools
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -45,7 +46,7 @@ def load_metadata(
     else:
         label_to_use = labels
 
-    metadata = pd.read_csv(path_helper.metadata_file_path, sep="\t")
+    metadata = pd.read_csv(path_helper.metadata_file_path)
     metadata = metadata[metadata["GroupK4"].isin(label_to_use)]
     if individual_to_ignore:
         individuals_to_ignore = load_individuals_to_ignore(individual_to_ignore)
@@ -114,13 +115,14 @@ def load_datasets(
     label_to_id = {
         label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())
     }
-    dna_tokenizer = get_tokenizer()
+    # dna_tokenizer = get_tokenizer()
 
     kwargs = {
         "max_position": max_position,
         "label_to_id": label_to_id,
-        "tokenizer": dna_tokenizer,
+        # "tokenizer": dna_tokenizer,
         "reference_genome": reference_genome,
+        "sequence_length": sequence_length,
     }
 
     if mode == DatasetMode.RANDOM_FIXED_LEN:
@@ -129,14 +131,12 @@ def load_datasets(
         ), "Sequence per individual must be greater than 0"
         selected_ds_class = RandomFixedLenDNADataset
         kwargs["sequence_per_individual"] = sequence_per_individual
-        kwargs["sequence_length"] = sequence_length
     elif mode == DatasetMode.SEQUENTIAL_FIXED_LEN:
         assert (
             sequence_per_individual == -1
         ), "Sequence per individual not supported in sequential mode"
         selected_ds_class = SequentialFixedLenDNADataset
         kwargs["overlaping_ratio"] = overlaping_ratio
-        kwargs["sequence_length"] = sequence_length
     else:
         raise ValueError(f"Unknown mode: {mode}, expected 'random' or 'sequential'")
 
@@ -167,8 +167,8 @@ def load_datasets(
     return train_dataset, test_dataset
 
 
-def data_collator(features: list) -> dict:
-    input_ids = torch.tensor([f["input_ids"] for f in features])
+def data_collator(features: list, tokenizer: PreTrainedTokenizerFast) -> dict:
+    input_ids = torch.tensor([tokenizer.encode(f["input_ids"]) for f in features])
     attention_mask = torch.ones_like(input_ids)
     labels = torch.tensor([f["labels"] for f in features])
     chromosome_positions = torch.tensor([f["chromosome_positions"] for f in features])
@@ -180,6 +180,15 @@ def data_collator(features: list) -> dict:
     }
 
 
+def get_data_collator(
+    tokenizer: PreTrainedTokenizerFast,
+) -> callable:
+    return functools.partial(
+        data_collator,
+        tokenizer=tokenizer,
+    )
+
+
 class DNADataset(Dataset):
 
     def __init__(
@@ -187,18 +196,18 @@ class DNADataset(Dataset):
         metadata_df: pd.DataFrame,
         snp_per_individual: dict[str, pl.DataFrame],
         reference_genome: pl.DataFrame,
+        sequence_length: int,
         max_position: int,
         label_to_id: dict[str, int],
-        tokenizer: PreTrainedTokenizerFast,
     ):
         super().__init__()
         self.metadata_df = metadata_df
         self.individuals = sorted(self.metadata_df.index.to_list())
         self.snp_per_individual = snp_per_individual
         self.reference_genome = reference_genome
+        self.sequence_length = sequence_length
         self.max_position = max_position
         self.label_to_id = label_to_id
-        self.tokenizer = tokenizer
 
     @property
     def id_to_label(self) -> dict[int, str]:
@@ -230,7 +239,7 @@ class DNADataset(Dataset):
             .tolist()
         )
         sequence = " ".join(sequence)
-        sequence = self.tokenizer.encode(sequence)
+        # sequence = self.tokenizer.encode(sequence)
 
         label = self.metadata_df.loc[individual, "GroupK4"]
         label_id = self.label_to_id[label]
@@ -243,77 +252,47 @@ class DNADataset(Dataset):
             "individual": individual,
         }
 
-    def _prepare_sequence_v2(self, sub_df: pl.DataFrame, individual: str):
-        sequence_position = sub_df["position"].to_numpy().astype(np.float32)
-        scaled_sequence_position = (sequence_position / self.max_position).tolist()
-        # Duplicate start and end positions to match with BOS and EOS tokens
-        scaled_sequence_position = (
-            [scaled_sequence_position[0]]
-            + scaled_sequence_position
-            + [scaled_sequence_position[-1]]
+    def _prepare_sequence_v2(self, individual: str, snp_idx: int) -> dict:
+        sub_ref = self.reference_genome[snp_idx : snp_idx + self.sequence_length]
+        start_pos = sub_ref["position"][0]
+        end_pos = sub_ref["position"][-1]
+        individual_df = self.snp_per_individual[individual]
+        sub_individual = individual_df.filter(
+            (individual_df["position"] >= start_pos)
+            & (individual_df["position"] <= end_pos)
         )
 
-        sequence = (
-            sub_df[["main_allele", "allele"]]
-            .map_rows(lambda x: "".join(x))
-            .to_numpy()
-            .squeeze()
-            .tolist()
+        sub_ref_updated = sub_ref.join(
+            sub_individual[["allele", "position"]], on="position", how="left"
         )
-        sequence = " ".join(sequence)
-        sequence = self.tokenizer.encode(sequence)
+        sub_ref_updated = sub_ref_updated.with_columns(
+            pl.col("allele").fill_null(pl.col("main_allele"))
+        )
 
-        label = self.metadata_df.loc[individual, "GroupK4"]
-        label_id = self.label_to_id[label]
-
-        return {
-            "input_ids": sequence,
-            "labels": label_id,
-            "chromosome_positions": scaled_sequence_position,
-            "interval": (sequence_position[0], sequence_position[-1]),
-            "individual": individual,
-        }
+        return self._prepare_sequence_v1(sub_ref_updated, individual)
 
 
-class FixedLenDNADataset(DNADataset):
+import random
+
+
+class RandomFixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        dataframes: dict[str, pl.DataFrame],
+        snp_per_individual: dict[str, pl.DataFrame],
+        reference_genome: pl.DataFrame,
         max_position: int,
         label_to_id: dict[str, int],
-        tokenizer: PreTrainedTokenizerFast,
-        sequence_length: int,
-    ):
-        super().__init__(
-            metadata_df=metadata_df,
-            snp_per_individual=dataframes,
-            max_position=max_position,
-            label_to_id=label_to_id,
-            tokenizer=tokenizer,
-        )
-        self.sequence_length = sequence_length
-
-
-class RandomFixedLenDNADataset(FixedLenDNADataset):
-
-    def __init__(
-        self,
-        metadata_df: pd.DataFrame,
-        dataframes: dict[str, pl.DataFrame],
-        max_position: int,
-        label_to_id: dict[str, int],
-        tokenizer: PreTrainedTokenizerFast,
         sequence_length: int,
         sequence_per_individual: int,
     ):
         super().__init__(
             metadata_df=metadata_df,
-            dataframes=dataframes,
+            snp_per_individual=snp_per_individual,
+            reference_genome=reference_genome,
             max_position=max_position,
             label_to_id=label_to_id,
-            tokenizer=tokenizer,
             sequence_length=sequence_length,
         )
         self.sequence_per_individual = sequence_per_individual
@@ -321,33 +300,34 @@ class RandomFixedLenDNADataset(FixedLenDNADataset):
     def __len__(self):
         return len(self.individuals) * self.sequence_per_individual
 
-    def __getitem__(self, idx):
-        individual = np.random.choice(self.individuals)
-        df = self.snp_per_individual[individual]
-        snp_idx = np.random.choice(df.shape[0] - self.sequence_length)
-        sub_df = df[snp_idx : snp_idx + self.sequence_length]
+    def __getitem__(self, index: int) -> dict:
+        individual = random.choice(self.individuals)
+        snp_idx = random.randint(
+            0, self.reference_genome.shape[0] - self.sequence_length
+        )
+        return self._prepare_sequence_v2(individual, snp_idx)
 
-        return self._prepare_sequence(sub_df, individual)
 
-
-class SequentialFixedLenDNADataset(FixedLenDNADataset):
+class SequentialFixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
         metadata_df: pd.DataFrame,
-        dataframes: dict[str, pl.DataFrame],
+        snp_per_individual: dict[str, pl.DataFrame],
+        reference_genome: pl.DataFrame,
         max_position: int,
         label_to_id: dict[str, int],
-        tokenizer: PreTrainedTokenizerFast,
+        # tokenizer: PreTrainedTokenizerFast,
         sequence_length: int,
         overlaping_ratio: float,
     ):
         super().__init__(
             metadata_df=metadata_df,
-            dataframes=dataframes,
+            snp_per_individual=snp_per_individual,
+            reference_genome=reference_genome,
             max_position=max_position,
             label_to_id=label_to_id,
-            tokenizer=tokenizer,
+            # tokenizer=tokenizer,
             sequence_length=sequence_length,
         )
         self.overlaping_ratio = overlaping_ratio
@@ -361,6 +341,28 @@ class SequentialFixedLenDNADataset(FixedLenDNADataset):
                 self.sequence_length * (1 - self.overlaping_ratio)
             )
         return count
+
+    # def __getitem__(self, idx):
+    #     df = self.snp_per_individual[self.current_individual]
+    #     if self.current_position + self.sequence_length >= df.shape[0]:
+    #         next_individual_idx = self.individuals.index(self.current_individual) + 1
+
+    #         if next_individual_idx >= len(self.individuals):
+    #             raise StopIteration("End of dataset reached")
+
+    #         self.current_individual = self.individuals[next_individual_idx]
+    #         self.current_position = 0
+    #         logger.info(
+    #             f"Switching to individual {next_individual_idx} : {self.current_individual}"
+    #         )
+
+    #         df = self.snp_per_individual[self.current_individual]
+
+    #     sub_df = df[
+    #         self.current_position : self.current_position + self.sequence_length
+    #     ]
+    #     self.current_position += int(self.sequence_length * (1 - self.overlaping_ratio))
+    #     return self._prepare_sequence_v1(sub_df, self.current_individual)
 
     def __getitem__(self, idx):
         df = self.snp_per_individual[self.current_individual]
@@ -376,10 +378,8 @@ class SequentialFixedLenDNADataset(FixedLenDNADataset):
                 f"Switching to individual {next_individual_idx} : {self.current_individual}"
             )
 
-            df = self.snp_per_individual[self.current_individual]
-
-        sub_df = df[
-            self.current_position : self.current_position + self.sequence_length
-        ]
+        snp_idx = self.current_position
         self.current_position += int(self.sequence_length * (1 - self.overlaping_ratio))
-        return self._prepare_sequence(sub_df, self.current_individual)
+        return self._prepare_sequence_v2(
+            individual=self.current_individual, snp_idx=snp_idx
+        )

@@ -3,7 +3,8 @@ import typer
 from pathlib import Path
 import torch
 import numpy as np
-from adn.data.data import DatasetMode, data_collator, load_datasets
+from adn.data.data import DatasetMode, data_collator, get_data_collator, load_datasets
+from adn.models.tokenizer import get_tokenizer
 from adn.plots import plot_trainer_logs
 from adn.models.bert import DnaBertConfig, DnaBertForSequenceClassification
 from transformers import Trainer, TrainingArguments
@@ -44,6 +45,8 @@ def train_model(
     output_dir = Path(output_dir) / run_name
     assert not output_dir.exists(), f"Output directory {output_dir} already exists."
 
+    tokenizer = get_tokenizer()
+
     train_ds, eval_ds = load_datasets(
         path_helper=PathHelper(base_dir),
         sequence_per_individual=sequence_per_individual,
@@ -57,7 +60,7 @@ def train_model(
 
     dim = 256
     config = DnaBertConfig(
-        vocab_size=train_ds.tokenizer.vocab_size,
+        vocab_size=tokenizer.vocab_size,
         hidden_size=dim,
         intermediate_size=4 * dim,
         num_attention_heads=8,
@@ -69,9 +72,7 @@ def train_model(
     )
 
     if checkpoint_dir is None:
-        model = DnaBertForSequenceClassification(
-            config, class_weights=train_ds.class_weights
-        )
+        model = DnaBertForSequenceClassification(config)
     else:
         model = DnaBertForSequenceClassification.from_pretrained(
             checkpoint_dir,
@@ -92,7 +93,7 @@ def train_model(
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         warmup_ratio=0.05,
-        dataloader_num_workers=8,
+        # dataloader_num_workers=8,
         fp16=True,
         optim="adamw_torch_fused",
         remove_unused_columns=False,
@@ -110,7 +111,7 @@ def train_model(
     trainer = Trainer(
         model=model,
         args=training_args,
-        data_collator=data_collator,
+        data_collator=get_data_collator(tokenizer),
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         compute_metrics=compute_metrics,

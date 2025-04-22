@@ -11,10 +11,6 @@ import typer
 
 from adn.utils.paths_utils import PathHelper
 
-logger.configure(
-    handlers=[dict(sink=lambda msg: tqdm.write(msg, end=""), colorize=True)]
-)
-
 
 def setup_output_dirs(output_path: Path) -> tuple[Path, Path, Path]:
     chunks_output_dir = output_path / "chunks"
@@ -78,12 +74,14 @@ def filter_on_heterozygous_rate(
 
 
 def process_one_chunk(
-    chunk: pd.DataFrame,
+    chunk_path: Path,
     path_helper: PathHelper,
     individuals: list[str],
     max_missing_data_percent: float,
     max_heterozygous_percent: float,
 ):
+    logger.info(f"Processing chunk {chunk_path}")
+    chunk = pd.read_parquet(chunk_path)
 
     start_index = chunk.index[0]
     end_index = chunk.index[-1]
@@ -169,7 +167,7 @@ def hapmap_to_snp(
     metadata_path: Path = typer.Option(..., help="Path to the metadata file"),
     base_dir: Path = typer.Option(..., help="Path to the output directory"),
     limit: int = typer.Option(
-        None, help="Limit the number of rows to process (for testing purposes)"
+        None, help="Limit the number of chunks to process (for testing purposes)"
     ),
     max_workers: int = typer.Option(
         10, help="Number of workers for processing chunks in parallel"
@@ -201,17 +199,16 @@ def hapmap_to_snp(
         max_heterozygous_percent=max_heterozygous_percent,
     )
 
-    row_count = 0
-    for chunk_path in tqdm(path_helper.list_raw_chunks_paths):
-        chunk = pd.read_parquet(chunk_path)
-        logger.info(f"Processing chunk position: {chunk.index[0]}-{chunk.index[-1]}")
-        process_pool.submit(process_one_chunk_partial, chunk)
-        # process_one_chunk_partial(chunk)
+    chunks_paths = path_helper.list_raw_chunks_paths
+    if limit is not None:
+        chunks_paths = chunks_paths[:limit]
 
-        row_count += chunk.shape[0]
-        if limit is not None and row_count >= limit:
-            logger.info(f"Limit reached: {row_count} >= {limit} -> Stopping")
-            break
+    tqdm(
+        process_pool.map(process_one_chunk_partial, chunks_paths),
+        total=len(chunks_paths),
+        desc="Processing chunks",
+        unit="chunk",
+    )
 
     process_pool.shutdown(wait=True)
 
