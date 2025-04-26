@@ -1,8 +1,7 @@
-import json
 from pathlib import Path
 from typing import Optional
 import typer
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
 from typing import Optional
 import typer
 from pathlib import Path
@@ -13,7 +12,6 @@ from adn.models.tokenizer import get_tokenizer
 from adn.plots import plot_trainer_logs
 from adn.models.base_models.bert import DnaBertConfig, DnaBertForSequenceClassification
 from transformers import Trainer, TrainingArguments
-from transformers.integrations import TensorBoardCallback
 import evaluate
 
 from adn.utils.paths_utils import PathHelper
@@ -58,23 +56,10 @@ class Train(BaseModel):
         None, help="Path to the tokenizer file."
     )
 
-    @field_serializer(
-        "base_dir",
-        "output_dir",
-        "individuals_to_ignore",
-        "checkpoint_dir",
-        "tokenizer_path",
-    )
-    def serialize_path(self, value: Path) -> str:
-        return str(value)
-
     def model_post_init(self, _):
 
         output_dir = Path(self.output_dir) / self.run_name
         assert not output_dir.exists(), f"Output directory {output_dir} already exists."
-        output_dir.mkdir(parents=True, exist_ok=True)
-        with open(output_dir / "config.json", "w") as f:
-            json.dump(self.model_dump(), f, indent=4)
 
         tokenizer = get_tokenizer(self.tokenizer_path)
 
@@ -116,7 +101,7 @@ class Train(BaseModel):
             output_dir=output_dir / "checkpoints",
             eval_strategy="epoch",
             logging_strategy="epoch",
-            logging_dir=str(output_dir / "logs"),
+            logging_dir="logs",
             save_strategy="epoch",
             logging_first_step=True,
             num_train_epochs=self.epochs,
@@ -129,7 +114,6 @@ class Train(BaseModel):
             fp16=True,
             optim="adamw_torch_fused",
             remove_unused_columns=False,
-            report_to=["tensorboard"],
         )
 
         accuracy_metric = evaluate.load("accuracy")
@@ -148,7 +132,6 @@ class Train(BaseModel):
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             compute_metrics=compute_metrics,
-            callbacks=[TensorBoardCallback()],
         )
 
         trainer.train()

@@ -11,20 +11,51 @@ from transformers.models.bert.modeling_bert import (
 import torch
 from torch import nn
 
+from adn.models.activation_shaping import ActivationShapingS
+
 
 class DnaBertConfig(BertConfig):
 
     def __init__(
         self,
+        max_position: int = None,
         activation_shaping: bool = False,
         activation_shaping_pruning_level: float = 0.5,
         class_weights: Optional[list[float]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.max_position = max_position
         self.activation_shaping = activation_shaping
         self.activation_shaping_pruning_level = activation_shaping_pruning_level
         self.class_weights = class_weights
+
+
+class DnaBertEmbeddings2(BertEmbeddings):
+    """Construct the embeddings from word, position and token_type embeddings."""
+
+    def __init__(self, config: DnaBertConfig):
+        super().__init__(config)
+        self.chromosome_position_embeddings = nn.Linear(1, config.hidden_size)
+        self.max_position = config.max_position
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        chromosome_positions = input_ids[:, -2:].unsqueeze(-1)
+        input_ids = input_ids[:, :-2]
+        kwargs.pop("token_type_ids", None)
+
+        embeddings = super().forward(input_ids=input_ids, **kwargs)
+        # Add chromosome position embeddings
+        chromosome_positions = chromosome_positions / self.max_position
+        chromosome_position_embeddings = self.LayerNorm(
+            self.chromosome_position_embeddings(chromosome_positions)
+        )
+        embeddings = torch.cat([embeddings, chromosome_position_embeddings], dim=1)
+        return embeddings
 
 
 class DnaBertEmbeddings(BertEmbeddings):
@@ -92,39 +123,6 @@ class DnaBertEmbeddings(BertEmbeddings):
         return embeddings
 
 
-class ActivationShapingS(torch.nn.Module):
-
-    def __init__(self, pruning_level: float, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pruning_level = pruning_level
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, hidden_size = inputs.shape
-        fattened = inputs.reshape((batch_size, -1))
-        sum_1 = torch.sum(fattened, dim=1)
-
-        percentile = (
-            torch.quantile(fattened, self.pruning_level, dim=-1)
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .expand(-1, seq_len, hidden_size)
-        )
-        x_with_zeros = torch.where(
-            inputs > percentile, inputs, torch.zeros_like(inputs)
-        )
-        sum_2 = torch.sum(x_with_zeros.reshape((batch_size, -1)), dim=1)
-
-        # Avoid division by zero
-        exp_ratio = (
-            torch.exp(sum_1 / (sum_2 + 1e-6))
-            .unsqueeze(-1)
-            .unsqueeze(-1)
-            .expand(-1, seq_len, hidden_size)
-        )
-
-        return x_with_zeros * exp_ratio
-
-
 class ActivationShapingBertPooler(BertPooler):
 
     def __init__(self, config: DnaBertConfig):
@@ -150,7 +148,8 @@ class ActivationShapingBertPooler(BertPooler):
 class DnaBertForSequenceClassification(BertForSequenceClassification):
     def __init__(self, config: DnaBertConfig):
         super().__init__(config)
-        self.custom_embed = DnaBertEmbeddings(config)
+        # self.custom_embed = DnaBertEmbeddings(config)
+        self.bert.embeddings = DnaBertEmbeddings2(config)
 
         # Patch the BERT model to ActivationShaping (if set in the config)
         self.bert.pooler = ActivationShapingBertPooler(config)
@@ -162,22 +161,13 @@ class DnaBertForSequenceClassification(BertForSequenceClassification):
             else torch.tensor([1.0] * config.num_labels, dtype=torch.float32)
         )
 
-    def _embeddings(
-        self, chromosome_positions: torch.Tensor, **kwargs
-    ) -> BaseModelOutputWithPoolingAndCrossAttentions:
-        kwargs["inputs_embeds"] = self.custom_embed(
-            input_ids=kwargs.get("input_ids"),
-            position_ids=kwargs.get("position_ids"),
-            token_type_ids=kwargs.get("token_type_ids"),
-            chromosome_positions=chromosome_positions,
-        )
-        kwargs["input_ids"] = None
+    def _embeddings(self, **kwargs) -> BaseModelOutputWithPoolingAndCrossAttentions:
         return self.bert(
+            input_ids=kwargs.get("input_ids"),
             attention_mask=kwargs.get("attention_mask"),
             token_type_ids=kwargs.get("token_type_ids"),
             position_ids=kwargs.get("position_ids"),
             head_mask=kwargs.get("head_mask"),
-            inputs_embeds=kwargs.get("inputs_embeds"),
             output_attentions=kwargs.get("output_attentions"),
             output_hidden_states=kwargs.get("output_hidden_states"),
             return_dict=kwargs.get("return_dict"),
@@ -203,18 +193,12 @@ class DnaBertForSequenceClassification(BertForSequenceClassification):
         )
 
     def predict(
-        self, labels: torch.Tensor, chromosome_positions: torch.Tensor, **kwargs
+        self, labels: torch.Tensor, **kwargs
     ) -> tuple[BaseModelOutputWithPoolingAndCrossAttentions, SequenceClassifierOutput]:
-        embeddings_outputs = self._embeddings(
-            chromosome_positions=chromosome_positions, **kwargs
-        )
+        embeddings_outputs = self._embeddings(**kwargs)
         classifier_outputs = self._classify(embeddings_outputs, labels)
         return embeddings_outputs, classifier_outputs
 
-    def forward(
-        self, labels: torch.Tensor, chromosome_positions: torch.Tensor, **kwargs
-    ) -> SequenceClassifierOutput:
+    def forward(self, labels: torch.Tensor, **kwargs) -> SequenceClassifierOutput:
         assert kwargs.get("inputs_embeds") is None, "inputs_embeds not supported"
-        return self.predict(
-            labels=labels, chromosome_positions=chromosome_positions, **kwargs
-        )[1]
+        return self.predict(labels=labels, **kwargs)[1]

@@ -1,8 +1,5 @@
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import dataclass
 import functools
 import random
-from pathlib import Path
 from typing import Optional
 from loguru import logger
 import numpy as np
@@ -15,7 +12,6 @@ from tqdm.rich import tqdm
 from sklearn.model_selection import train_test_split
 from transformers import PreTrainedTokenizerFast
 
-from adn.models.tokenizer import get_tokenizer
 from adn.utils.paths_utils import PathHelper
 
 labels = {"XI", "GJ", "cA"}
@@ -152,15 +148,29 @@ def load_datasets(
 
 
 def data_collator(features: list, tokenizer: PreTrainedTokenizerFast) -> dict:
-    input_ids = torch.tensor([tokenizer.encode(f["input_ids"]) for f in features])
-    attention_mask = torch.ones_like(input_ids)
-    labels = torch.tensor([f["labels"] for f in features])
-    chromosome_positions = torch.tensor([f["chromosome_positions"] for f in features])
+    input_ids = []
+    labels = []
+    chromosome_positions = []
+    for f in features:
+        input_ids.append(tokenizer.encode(f["input_ids"]))
+        labels.append(f["labels"])
+        chromosome_positions.append(f["chromosome_positions"])
+    max_length = max(len(ids) for ids in input_ids)
+    input_ids = torch.tensor(
+        [ids + [tokenizer.pad_token_id] * (max_length - len(ids)) for ids in input_ids]
+    ).long()
+
+    attention_mask = (input_ids != tokenizer.pad_token_id).long()
+
+    chromosome_positions = torch.tensor(chromosome_positions).long()
+
+    input_ids = torch.cat([input_ids, chromosome_positions], dim=1)
+    labels = torch.tensor(labels)
+
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
-        "chromosome_positions": chromosome_positions,
     }
 
 
@@ -205,13 +215,10 @@ class DNADataset(Dataset):
 
     def _prepare_sequence_v1(self, sub_df: pl.DataFrame, individual: str) -> dict:
         sequence_position = sub_df["position"].to_numpy().astype(np.float32)
-        scaled_sequence_position = (sequence_position / self.max_position).tolist()
-        # Duplicate start and end positions to match with BOS and EOS tokens
-        scaled_sequence_position = (
-            [scaled_sequence_position[0]]
-            + scaled_sequence_position
-            + [scaled_sequence_position[-1]]
-        )
+        start_pos = sequence_position[0]  # / self.max_position
+        end_pos = sequence_position[-1]  # / self.max_position
+
+        scaled_sequence_position = [start_pos, end_pos]
 
         sequence = (
             sub_df[["main_allele", "allele"]]
@@ -221,7 +228,6 @@ class DNADataset(Dataset):
             .tolist()
         )
         sequence = " ".join(sequence)
-        # sequence = self.tokenizer.encode(sequence)
 
         label = self.metadata_df.loc[individual, "GroupK4"]
         label_id = self.label_to_id[label]

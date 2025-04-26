@@ -12,7 +12,6 @@ app = typer.Typer(
 app.add_typer(hapmap_to_spn_app)
 app.add_typer(hapmap_to_parquet_app)
 
-
 if __name__ == "__main__":
     logger_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> [<level>{level: ^12}</level>] <level>{message}</level>"
     logger.configure(

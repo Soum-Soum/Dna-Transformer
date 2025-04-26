@@ -26,6 +26,8 @@ dependencies = [
     "torchvision (>=0.21.0,<0.22.0)",
     "torchaudio (>=2.6.0,<3.0.0)",
     "plotly (>=5.5.0,<6.0.0)",
+    "tensorboardx (>=2.6.2.2,<3.0.0.0)",
+    "tensorboard (>=2.19.0,<3.0.0)",
 ]
 
 
