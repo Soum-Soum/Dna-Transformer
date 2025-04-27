@@ -60,19 +60,22 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
 
     def __init__(self, config: DnaModernBertConfig):
         super().__init__(config)
-
         self.model.embeddings = DnaModernBertEmbeddings(config)
+        self.class_weights = (
+            torch.tensor(config.class_weights, dtype=torch.float32)
+            if config.class_weights is not None
+            else torch.tensor([1.0] * config.num_labels, dtype=torch.float32)
+        )
 
     def _embeddings(self, **kwargs) -> BaseModelOutput:
-        return self.bert(
+        return self.model(
             input_ids=kwargs.get("input_ids"),
             attention_mask=kwargs.get("attention_mask"),
-            token_type_ids=kwargs.get("token_type_ids"),
             position_ids=kwargs.get("position_ids"),
-            head_mask=kwargs.get("head_mask"),
             output_attentions=kwargs.get("output_attentions"),
             output_hidden_states=kwargs.get("output_hidden_states"),
             return_dict=kwargs.get("return_dict"),
+            seq_len=kwargs.get("input_ids").shape[1] // 2,
         )
 
     def _classify(
