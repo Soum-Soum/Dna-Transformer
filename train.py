@@ -1,17 +1,18 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 import typer
 from pydantic import BaseModel, field_serializer
-from typing import Optional
-import typer
-from pathlib import Path
 import torch
 import numpy as np
 from adn.data.data import DatasetMode, get_data_collator, load_datasets
 from adn.models.tokenizer import get_tokenizer
 from adn.plots import plot_trainer_logs
 from adn.models.base_models.bert import DnaBertConfig, DnaBertForSequenceClassification
+from adn.models.base_models.modern_bert import (
+    DnaModernBertConfig,
+    DnaModernBertForSequenceClassification,
+)
 from transformers import Trainer, TrainingArguments
 from transformers.integrations import TensorBoardCallback
 import evaluate
@@ -44,6 +45,13 @@ class Train(BaseModel):
     epochs: int = typer.Option(20, help="Number of training epochs.")
     batch_size: int = typer.Option(256, help="Batch size for training and evaluation.")
     learning_rate: float = typer.Option(1e-3, help="Learning rate for training.")
+    model_dim: int = typer.Option(
+        128, help="Dimensionality of the model (hidden size)."
+    )
+
+    model_type: Literal["bert", "modern_bert"] = typer.Option(
+        "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
+    )
 
     labels_to_remove: Optional[str] = typer.Option(
         None, help="Labels to remove from metadata seperated by commas."
@@ -89,24 +97,35 @@ class Train(BaseModel):
             individual_to_ignore=self.individuals_to_ignore,
         )
 
-        dim = 128
-        config = DnaBertConfig(
-            vocab_size=tokenizer.vocab_size,
-            hidden_size=dim,
-            intermediate_size=4 * dim,
-            num_attention_heads=8,
-            num_labels=len(train_ds.label_to_id),
-            position_embedding_type="absolute",
-            class_weights=train_ds.class_weights.tolist(),
-            activation_shaping=True,
-            activation_shaping_pruning_level=0.8,
-            max_position=train_ds.max_position,
-        )
+        common_config_args = {
+            "vocab_size": tokenizer.vocab_size,
+            "hidden_size": self.model_dim,
+            "num_attention_heads": 8,
+            "num_labels": len(train_ds.label_to_id),
+            "class_weights": train_ds.class_weights.tolist(),
+            "activation_shaping": True,
+            "activation_shaping_pruning_level": 0.8,
+            "max_position": train_ds.max_position,
+        }
+
+        if self.model_type == "bert":
+            config = DnaBertConfig(
+                **common_config_args,
+                intermediate_size=self.model_dim * 4,
+                position_embedding_type="absolute",
+            )
+            model_class = DnaBertForSequenceClassification
+        else:  # modern_bert
+            config = DnaModernBertConfig(
+                **common_config_args,
+                intermediate_size=1.5 * self.model_dim,
+            )
+            model_class = DnaModernBertForSequenceClassification
 
         if self.checkpoint_dir is None:
-            model = DnaBertForSequenceClassification(config)
+            model = model_class(config)
         else:
-            model = DnaBertForSequenceClassification.from_pretrained(
+            model = model_class.from_pretrained(
                 self.checkpoint_dir,
                 config=config,
                 ignore_mismatched_sizes=True,
@@ -148,7 +167,6 @@ class Train(BaseModel):
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             compute_metrics=compute_metrics,
-            callbacks=[TensorBoardCallback()],
         )
 
         trainer.train()

@@ -214,11 +214,15 @@ class DNADataset(Dataset):
         )
 
     def _prepare_sequence_v1(self, sub_df: pl.DataFrame, individual: str) -> dict:
-        sequence_position = sub_df["position"].to_numpy().astype(np.float32)
-        start_pos = sequence_position[0]  # / self.max_position
-        end_pos = sequence_position[-1]  # / self.max_position
-
-        scaled_sequence_position = [start_pos, end_pos]
+        chromosome_positions = sub_df["position"].to_numpy().astype(np.float32).tolist()
+        chromosome_positions = sum(
+            [
+                [chromosome_positions[0]],
+                chromosome_positions,
+                [chromosome_positions[-1]],
+            ],
+            [],
+        )
 
         sequence = (
             sub_df[["main_allele", "allele"]]
@@ -235,8 +239,8 @@ class DNADataset(Dataset):
         return {
             "input_ids": sequence,
             "labels": label_id,
-            "chromosome_positions": scaled_sequence_position,
-            "interval": (sequence_position[0], sequence_position[-1]),
+            "chromosome_positions": chromosome_positions,
+            "interval": (chromosome_positions[0], chromosome_positions[-1]),
             "individual": individual,
         }
 
