@@ -66,6 +66,10 @@ class Train(BaseModel):
     tokenizer_path: Optional[Path] = typer.Option(
         None, help="Path to the tokenizer file."
     )
+    activation_shaping_pruning_level: float = typer.Option(
+        0.0,
+        help="Pruning level for activation shaping (0.0 to 1.0).",
+    )
 
     @field_serializer(
         "base_dir",
@@ -105,7 +109,7 @@ class Train(BaseModel):
                 "num_labels": len(train_ds.label_to_id),
                 "class_weights": train_ds.class_weights.tolist(),
                 "activation_shaping": True,
-                "activation_shaping_pruning_level": 0.8,
+                "activation_shaping_pruning_level": self.activation_shaping_pruning_level,
                 "max_position": train_ds.max_position,
             }
 
@@ -114,6 +118,8 @@ class Train(BaseModel):
                     **common_config_args,
                     intermediate_size=self.model_dim * 4,
                     position_embedding_type="absolute",
+                    hidden_dropout_prob=0,
+                    attention_probs_dropout_prob=0,
                 )
                 the_constructor = DnaBertForSequenceClassification
             else:
@@ -126,9 +132,14 @@ class Train(BaseModel):
                 the_constructor = DnaModernBertForSequenceClassification
 
             if self.checkpoint_dir is None:
-                print("Training from scratch")
+                logger.info(
+                    "No checkpoint provided, creating a new model and training from scratch."
+                )
                 model = the_constructor(config)
             else:
+                logger.info(
+                    f"Loading checkpoint from {self.checkpoint_dir} and resuming training."
+                )
                 model = the_constructor.from_pretrained(
                     self.checkpoint_dir,
                     config=config,
@@ -138,9 +149,10 @@ class Train(BaseModel):
             training_args = TrainingArguments(
                 output_dir=output_dir / "checkpoints",
                 eval_strategy="epoch",
-                logging_strategy="epoch",
-                logging_dir=str(output_dir / "logs"),
                 save_strategy="epoch",
+                logging_strategy="steps",
+                logging_dir=str(output_dir / "logs"),
+                logging_steps=1000,
                 logging_first_step=True,
                 num_train_epochs=self.epochs,
                 lr_scheduler_type="cosine_with_restarts",
