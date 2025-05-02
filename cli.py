@@ -1,7 +1,7 @@
 from loguru import logger
 from tqdm import tqdm
 import typer
-from adn.cli.hapmap_to_snp import app as hapmap_to_spn_app
+from adn.cli.hapmap_to_snp_per_individual import app as hapmap_to_spn_app
 from adn.cli.hapmap_to_parquet import app as hapmap_to_parquet_app
 
 app = typer.Typer(

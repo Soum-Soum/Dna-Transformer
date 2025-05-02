@@ -49,7 +49,7 @@ class Train(BaseModel):
 
     epochs: int = typer.Option(20, help="Number of training epochs.")
     batch_size: int = typer.Option(256, help="Batch size for training and evaluation.")
-    learning_rate: float = typer.Option(1e-3, help="Learning rate for training.")
+    learning_rate: float = typer.Option(5e-5, help="Learning rate for training.")
     model_dim: int = typer.Option(
         128, help="Dimensionality of the model (hidden size)."
     )

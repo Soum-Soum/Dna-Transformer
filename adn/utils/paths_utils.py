@@ -13,19 +13,19 @@ class PathHelper:
         return self.base_dir / "raw_chunks"
 
     @property
-    def chunks_output_dir(self) -> Path:
+    def chunks_dir(self) -> Path:
         """Directory where processed chunks are stored."""
         return self.base_dir / "chunks"
 
     @property
-    def main_alleles_output_dir(self) -> Path:
+    def main_alleles_dir(self) -> Path:
         """Directory where main alleles per chunk are stored."""
         return self.base_dir / "main_alleles"
 
     @property
-    def snps_output_dir(self) -> Path:
+    def snp_per_individual_dir(self) -> Path:
         """Directory where SNPs per individual are stored."""
-        return self.base_dir / "SNPs"
+        return self.base_dir / "snp_per_individual"
 
     @property
     def all_snp_file_path(self) -> Path:
@@ -50,17 +50,17 @@ class PathHelper:
 
     @property
     def list_chunks_paths(self) -> list[Path]:
-        return list(sorted(self.chunks_output_dir.glob("*.parquet")))
+        return list(sorted(self.chunks_dir.glob("*.parquet")))
 
     @property
     def list_main_alleles_paths(self) -> list[Path]:
-        return list(sorted(self.main_alleles_output_dir.glob("*.parquet")))
+        return list(sorted(self.main_alleles_dir.glob("*.parquet")))
 
     @property
     def list_snps_per_individual_paths(self) -> list[Path]:
-        return list(sorted(self.snps_output_dir.glob("*.parquet")))
+        return list(sorted(self.snp_per_individual_dir.glob("*.parquet")))
 
     def setup_output_dirs(self):
-        self.chunks_output_dir.mkdir(exist_ok=True, parents=True)
-        self.main_alleles_output_dir.mkdir(exist_ok=True, parents=True)
-        self.snps_output_dir.mkdir(exist_ok=True, parents=True)
+        self.chunks_dir.mkdir(exist_ok=True, parents=True)
+        self.main_alleles_dir.mkdir(exist_ok=True, parents=True)
+        self.snp_per_individual_dir.mkdir(exist_ok=True, parents=True)

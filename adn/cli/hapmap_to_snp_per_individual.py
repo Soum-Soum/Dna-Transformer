@@ -12,16 +12,6 @@ import typer
 from adn.utils.paths_utils import PathHelper
 
 
-def setup_output_dirs(output_path: Path) -> tuple[Path, Path, Path]:
-    chunks_output_dir = output_path / "chunks"
-    main_alleles_output_dir = output_path / "main_alleles"
-    snps_output_dir = output_path / "SNPs"
-    chunks_output_dir.mkdir(exist_ok=True, parents=True)
-    main_alleles_output_dir.mkdir(exist_ok=True, parents=True)
-    snps_output_dir.mkdir(exist_ok=True, parents=True)
-    return chunks_output_dir, main_alleles_output_dir, snps_output_dir
-
-
 def extract_spn(row: pd.Series, individuals: list[str]):
     position = row["pos"]
     main_allele = row["main_allele"]
@@ -73,12 +63,34 @@ def filter_on_heterozygous_rate(
     return chunk
 
 
+def filter_on_maf(
+    chunk: pd.DataFrame,
+    individuals: list[str],
+    min_maf_percent: float,
+) -> pd.DataFrame:
+    before_len = len(chunk)
+    main_allele = chunk["main_allele"]
+    matrix = np.repeat(main_allele.values, len(individuals), axis=0).reshape(
+        (len(chunk), len(individuals))
+    )
+    matrix = pd.DataFrame(matrix, columns=individuals, index=chunk.index)
+
+    diff = matrix != chunk[individuals]
+    maf_percentage = (diff.sum(axis=1) / len(individuals)) * 100
+    chunk = chunk[maf_percentage >= min_maf_percent]
+    logger.info(
+        f"Filtered based on minor allele frequency: before {before_len}, after {len(chunk)}"
+    )
+    return chunk
+
+
 def process_one_chunk(
     chunk_path: Path,
     path_helper: PathHelper,
     individuals: list[str],
     max_missing_data_percent: float,
     max_heterozygous_percent: float,
+    min_maf_percent: float,
 ):
     logger.info(f"Processing chunk {chunk_path}")
     chunk = pd.read_parquet(chunk_path)
@@ -86,10 +98,9 @@ def process_one_chunk(
     start_index = chunk.index[0]
     end_index = chunk.index[-1]
     chunk_file_name = f"chunk_{start_index}_{end_index}.parquet"
-    current_chunk_output_path = path_helper.chunks_output_dir / chunk_file_name
+    current_chunk_output_path = path_helper.chunks_dir / chunk_file_name
     current_main_allele_output_path = (
-        path_helper.main_alleles_output_dir
-        / f"main_allele_{start_index}_{end_index}.parquet"
+        path_helper.main_alleles_dir / f"main_allele_{start_index}_{end_index}.parquet"
     )
     if current_chunk_output_path.exists():
         return
@@ -105,6 +116,13 @@ def process_one_chunk(
         max_heterozygous_percent,
     )
     chunk["main_allele"] = chunk[individuals].mode(axis=1)
+
+    chunk = filter_on_maf(
+        chunk,
+        individuals,
+        min_maf_percent,
+    )
+
     res = chunk.apply(lambda row: extract_spn(row, individuals), axis=1)
     res = pd.concat(res.tolist())
     res.to_parquet(current_chunk_output_path)
@@ -152,7 +170,9 @@ def split_snps_per_individual(
     for individual in tqdm(individuals):
         sub_df = snp_df.filter(pl.col("individual") == individual)
         sub_df = sub_df.sort("position")
-        sub_df.write_parquet(path_helper.snps_output_dir / f"{individual}.parquet")
+        sub_df.write_parquet(
+            path_helper.individuals_output_dir / f"{individual}.parquet"
+        )
         logger.info(f"Individual {individual} processed")
 
 
@@ -160,10 +180,10 @@ app = typer.Typer()
 
 
 @app.command(
-    name="hapmap-to-snp",
-    help="Convert hapmap file to SPN format",
+    name="hapmap-to-snp-per-individual",
+    help="Convert hapmap chunks to individual files. Each file contains SNPs for one individual.",
 )
-def hapmap_to_snp(
+def hapmap_to_snp_per_individual(
     metadata_path: Path = typer.Option(..., help="Path to the metadata file"),
     base_dir: Path = typer.Option(..., help="Path to the output directory"),
     limit: int = typer.Option(
@@ -178,9 +198,13 @@ def hapmap_to_snp(
     max_heterozygous_percent: float = typer.Option(
         5, help="the percent of heterozygous data allowed for one SNP"
     ),
+    min_maf_percent: float = typer.Option(
+        0.2, help="the minimum minor allele frequency allowed for one SNP"
+    ),
 ):
 
     path_helper = PathHelper(base_dir)
+    path_helper.setup_output_dirs()
 
     metadata_df = pd.read_csv(metadata_path, sep="\t")
     if "label" not in metadata_df.columns:
@@ -193,14 +217,13 @@ def hapmap_to_snp(
 
     process_pool = ProcessPoolExecutor(max_workers=max_workers)
 
-    path_helper.setup_output_dirs()
-
     process_one_chunk_partial = functools.partial(
         process_one_chunk,
         path_helper=path_helper,
         individuals=individuals,
         max_missing_data_percent=max_missing_data_percent,
         max_heterozygous_percent=max_heterozygous_percent,
+        min_maf_percent=min_maf_percent,
     )
 
     chunks_paths = path_helper.list_raw_chunks_paths
