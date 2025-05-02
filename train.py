@@ -7,7 +7,8 @@ import typer
 from pydantic import BaseModel, field_serializer
 import torch
 import numpy as np
-from adn.data.data import DatasetMode, get_data_collator, load_datasets
+from adn.data.data import DatasetMode, load_datasets
+from adn.data.data_collator import get_data_collator
 from adn.models.tokenizer import get_tokenizer
 from adn.plots import plot_trainer_logs
 from adn.models.base_models.bert import DnaBertConfig, DnaBertForSequenceClassification
