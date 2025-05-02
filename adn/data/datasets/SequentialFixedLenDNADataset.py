@@ -50,6 +50,6 @@ class SequentialFixedLenDNADataset(DNADataset):
 
         snp_idx = self.current_position
         self.current_position += int(self.sequence_length * (1 - self.overlaping_ratio))
-        return self._prepare_sequence_v2(
+        return self.get_sequence_dict(
             individual=self.current_individual, snp_idx=snp_idx
         )

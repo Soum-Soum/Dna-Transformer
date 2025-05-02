@@ -34,4 +34,4 @@ class RandomFixedLenDNADataset(DNADataset):
         snp_idx = random.randint(
             0, self.reference_genome.shape[0] - self.sequence_length
         )
-        return self._prepare_sequence_v2(individual, snp_idx)
+        return self.get_sequence_dict(individual, snp_idx)

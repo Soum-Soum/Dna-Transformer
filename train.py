@@ -31,6 +31,9 @@ class Train(BaseModel):
     """
 
     base_dir: Path = typer.Option(help="Base data directory containing the dataset.")
+    metadata_file: Optional[Path] = typer.Option(
+        None, help="Path to the metadata file to use (will override the default one)."
+    )
     output_dir: Path = typer.Option(
         Path("output"), help="Directory to save model checkpoints."
     )
@@ -74,6 +77,7 @@ class Train(BaseModel):
 
     @field_serializer(
         "base_dir",
+        "metadata_file",
         "output_dir",
         "individuals_to_ignore",
         "checkpoint_dir",
@@ -93,7 +97,9 @@ class Train(BaseModel):
             tokenizer = get_tokenizer(self.tokenizer_path)
 
             train_ds, eval_ds = load_datasets(
-                path_helper=PathHelper(self.base_dir),
+                path_helper=PathHelper(
+                    self.base_dir, custom_metadata_file=self.metadata_file
+                ),
                 sequence_per_individual=self.sequence_per_individual,
                 sequence_length=self.sequence_length,
                 train_eval_split=self.train_eval_split,

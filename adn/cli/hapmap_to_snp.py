@@ -183,7 +183,11 @@ def hapmap_to_snp(
     path_helper = PathHelper(base_dir)
 
     metadata_df = pd.read_csv(metadata_path, sep="\t")
+    if "label" not in metadata_df.columns:
+        metadata_df["label"] = metadata_df["GroupK4"]
+
     metadata_df.to_csv(path_helper.metadata_file_path)
+    exit(0)
 
     individuals = metadata_df["individual"]
 

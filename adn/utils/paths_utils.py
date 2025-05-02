@@ -3,8 +3,9 @@ from pathlib import Path
 
 class PathHelper:
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, custom_metadata_file: Path = None):
         self.base_dir = base_dir
+        self.custom_metadata_file = custom_metadata_file
 
     @property
     def raw_chunks_dir(self) -> Path:
@@ -39,11 +40,13 @@ class PathHelper:
     @property
     def metadata_file_path(self) -> Path:
         """Path to the metadata file."""
+        if self.custom_metadata_file:
+            return self.custom_metadata_file
         return self.base_dir / "metadata.csv"
 
     @property
     def list_raw_chunks_paths(self) -> list[Path]:
-        return list(sorted(self.raw_chunks_dir.glob("*.parquet")))  
+        return list(sorted(self.raw_chunks_dir.glob("*.parquet")))
 
     @property
     def list_chunks_paths(self) -> list[Path]:

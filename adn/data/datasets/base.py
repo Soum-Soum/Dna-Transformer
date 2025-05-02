@@ -58,10 +58,29 @@ class DNADataset(Dataset):
         return compute_class_weight(
             "balanced",
             classes=np.array(list(self.label_to_id.keys())),
-            y=self.metadata_df["GroupK4"],
+            y=self.metadata_df["label"],
         )
 
-    def _prepare_sequence_v1(self, sub_df: pl.DataFrame, individual: str) -> dict:
+    def _extract_individual_subsequence(
+        self, individual: str, snp_idx: int
+    ) -> pl.DataFrame:
+        sub_ref = self.reference_genome[snp_idx : snp_idx + self.sequence_length]
+        start_pos = sub_ref["position"][0]
+        end_pos = sub_ref["position"][-1]
+        individual_df = self.snp_per_individual[individual]
+        sub_individual = individual_df.filter(
+            (individual_df["position"] >= start_pos)
+            & (individual_df["position"] <= end_pos)
+        )
+        sub_ref_updated = sub_ref.join(
+            sub_individual[["allele", "position"]], on="position", how="left"
+        )
+        sub_ref_updated = sub_ref_updated.with_columns(
+            pl.col("allele").fill_null(pl.col("main_allele"))
+        )
+        return sub_ref_updated
+
+    def _subsequence_to_dict(self, sub_df: pl.DataFrame, individual: str) -> dict:
         chromosome_positions = sub_df["position"].to_numpy().astype(np.float32).tolist()
         chromosome_positions = sum(
             [
@@ -81,7 +100,7 @@ class DNADataset(Dataset):
         )
         sequence = " ".join(sequence)
 
-        label = self.metadata_df.loc[individual, "GroupK4"]
+        label = self.metadata_df.loc[individual, "label"]
         label_id = self.label_to_id[label]
 
         return {
@@ -92,21 +111,6 @@ class DNADataset(Dataset):
             "individual": individual,
         }
 
-    def _prepare_sequence_v2(self, individual: str, snp_idx: int) -> dict:
-        sub_ref = self.reference_genome[snp_idx : snp_idx + self.sequence_length]
-        start_pos = sub_ref["position"][0]
-        end_pos = sub_ref["position"][-1]
-        individual_df = self.snp_per_individual[individual]
-        sub_individual = individual_df.filter(
-            (individual_df["position"] >= start_pos)
-            & (individual_df["position"] <= end_pos)
-        )
-
-        sub_ref_updated = sub_ref.join(
-            sub_individual[["allele", "position"]], on="position", how="left"
-        )
-        sub_ref_updated = sub_ref_updated.with_columns(
-            pl.col("allele").fill_null(pl.col("main_allele"))
-        )
-
-        return self._prepare_sequence_v1(sub_ref_updated, individual)
+    def get_sequence_dict(self, individual: str, snp_idx: int) -> dict:
+        sub_ref_updated = self._extract_individual_subsequence(individual, snp_idx)
+        return self._subsequence_to_dict(sub_ref_updated, individual)

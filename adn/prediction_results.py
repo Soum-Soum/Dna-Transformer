@@ -48,11 +48,11 @@ class OnDiskPredictionResults:
             map(lambda x: x.with_suffix(".npy"), self.parquet_files_paths)
         )
         self.metadata = pd.read_csv(str(parquet_dir / "metadata.csv"), index_col=0)
-        self.individual_to_label = self.metadata["GroupK4"].to_dict()
+        self.individual_to_label = self.metadata["label"].to_dict()
         self.embeddings_dim = np.load(self.npy_files_paths[0]).shape[1]
 
     def compute_centroids(self) -> dict[str, np.ndarray]:
-        lables_set = set(self.metadata["GroupK4"].unique())
+        lables_set = set(self.metadata["label"].unique())
         centroids = {label: np.zeros(self.embeddings_dim) for label in lables_set}
         counts = {label: 0 for label in lables_set}
 

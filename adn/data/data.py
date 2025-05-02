@@ -10,30 +10,56 @@ from adn.data.datasets.base import (
 )
 from adn.utils.paths_utils import PathHelper
 
-labels = {"XI", "GJ", "cA"}
-
 
 def load_metadata(
     path_helper: PathHelper,
     labels_to_remove: Optional[str],
     data_ratio_to_use: float,
     individual_to_ignore: Optional[str],
-) -> pd.DataFrame:
-    if labels_to_remove:
-        labels_to_remove = set(labels_to_remove.split(","))
-        label_to_use = labels - labels_to_remove
-        logger.info(f"Using labels: {label_to_use}. Excluding: {labels_to_remove}")
-    else:
-        label_to_use = labels
+    train_eval_split: float,
+) -> tuple[pd.DataFrame, Optional[pd.DataFrame]]:
 
     metadata = pd.read_csv(path_helper.metadata_file_path)
-    metadata = metadata[metadata["GroupK4"].isin(label_to_use)]
+    logger.info(f"Loaded metadata with {len(metadata)} individuals")
+
+    if labels_to_remove:
+        all_labels = set(metadata["label"].unique())
+        labels_to_remove = set(labels_to_remove.split(","))
+        label_to_use = all_labels - labels_to_remove
+        logger.info(f"Using labels: {label_to_use}. Excluding: {labels_to_remove}")
+        logger.info(f"Filtering metadata to use only labels: {label_to_use}")
+        metadata = metadata[metadata["label"].isin(label_to_use)]
+
     if individual_to_ignore:
         individuals_to_ignore = load_individuals_to_ignore(individual_to_ignore)
         metadata = metadata[~metadata["individual"].isin(individuals_to_ignore)]
         logger.info(f"Ignoring individuals: {individuals_to_ignore}")
-    metadata = metadata.sample(frac=data_ratio_to_use, random_state=42)
-    return metadata
+
+    if data_ratio_to_use < 1.0:
+        logger.info(
+            f"Using {data_ratio_to_use * 100}% of the data. Original size: {len(metadata)}"
+        )
+        metadata = metadata.sample(frac=data_ratio_to_use, random_state=42)
+
+    metadata = metadata.set_index("individual")
+
+    if train_eval_split != 0:
+        logger.info(
+            f"Splitting metadata (len: {len(metadata)}) into train and test with ratio: {train_eval_split}"
+        )
+        train_metadata, test_metadata, _, _ = train_test_split(
+            metadata,
+            metadata,
+            test_size=train_eval_split,
+            random_state=42,
+            stratify=metadata["label"],
+        )
+    else:
+        logger.info("Train test split set to 0, using all data for training")
+        train_metadata = metadata
+        test_metadata = None
+
+    return train_metadata, test_metadata
 
 
 def load_individuals_to_ignore(individuals_to_ignore: str) -> set[str]:
@@ -58,25 +84,16 @@ def load_datasets(
     labels_to_remove: Optional[str] = None,
     individual_to_ignore: Optional[str] = None,
 ) -> tuple["DNADataset", Optional["DNADataset"]]:
-    metadata = load_metadata(
-        path_helper, labels_to_remove, data_ratio_to_use, individual_to_ignore
-    ).set_index("individual")
-
-    if train_eval_split != 0:
-        train_metadata, test_metadata, _, _ = train_test_split(
-            metadata,
-            metadata,
-            test_size=train_eval_split,
-            random_state=42,
-            stratify=metadata["GroupK4"],
-        )
-    else:
-        logger.info("Train test split set to 0, using all data for training")
-        train_metadata = metadata
-        test_metadata = None
+    train_metadata, test_metadata = load_metadata(
+        path_helper=path_helper,
+        labels_to_remove=labels_to_remove,
+        data_ratio_to_use=data_ratio_to_use,
+        individual_to_ignore=individual_to_ignore,
+        train_eval_split=train_eval_split,
+    )
 
     label_to_id = {
-        label: idx for idx, label in enumerate(train_metadata["GroupK4"].unique())
+        label: idx for idx, label in enumerate(train_metadata["label"].unique())
     }
 
     kwargs = {
