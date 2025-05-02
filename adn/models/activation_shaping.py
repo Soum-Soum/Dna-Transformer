@@ -8,6 +8,15 @@ class ActivationShapingS(torch.nn.Module):
         self.pruning_level = pruning_level
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Apply activation type S to the inputs.
+        for details, see: https://arxiv.org/pdf/2209.09858
+
+        Args:
+            inputs (torch.Tensor): _input tensor of shape (batch_size, seq_len, hidden_size)
+
+        Returns:
+            torch.Tensor: output tensor of the same shape as inputs
+        """
         batch_size, seq_len, hidden_size = inputs.shape
         fattened = inputs.reshape((batch_size, -1))
         sum_1 = torch.sum(fattened, dim=1)

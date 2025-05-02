@@ -1,13 +1,17 @@
 from typing import Optional
+from loguru import logger
 import torch
 from transformers import ModernBertConfig
 from transformers.models.modernbert.modeling_modernbert import (
     ModernBertEmbeddings,
     ModernBertForSequenceClassification,
+    ModernBertPredictionHead,
     BaseModelOutput,
     SequenceClassifierOutput,
 )
 from torch import nn
+
+from adn.models.activation_shaping import ActivationShapingS
 
 
 class DnaModernBertConfig(ModernBertConfig):
@@ -56,6 +60,29 @@ class DnaModernBertEmbeddings(ModernBertEmbeddings):
         )
 
 
+class ActivationShapingModernBertPredictionHead(ModernBertPredictionHead):
+
+    def __init__(self, config: DnaModernBertConfig):
+        super().__init__(config)
+        if config.activation_shaping:
+            logger.info(
+                f"Using activation shaping with pruning level {config.activation_shaping_pruning_level}"
+            )
+            self.activation_shaping = ActivationShapingS(
+                pruning_level=config.activation_shaping_pruning_level
+            )
+        else:
+            self.activation_shaping = None
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.activation_shaping is not None:
+            hidden_states = hidden_states.unsqueeze(1)
+            hidden_states = self.activation_shaping(hidden_states)
+            hidden_states = hidden_states.squeeze(1)
+
+        return super().forward(hidden_states)
+
+
 class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification):
 
     def __init__(self, config: DnaModernBertConfig):
@@ -66,6 +93,7 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
             if config.class_weights is not None
             else torch.tensor([1.0] * config.num_labels, dtype=torch.float32)
         )
+        self.head = ActivationShapingModernBertPredictionHead(config)
 
     def _embeddings(self, **kwargs) -> BaseModelOutput:
         return self.model(
