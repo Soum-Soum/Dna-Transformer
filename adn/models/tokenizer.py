@@ -1,3 +1,6 @@
+from pathlib import Path
+from typing import Optional
+from loguru import logger
 from tokenizers import (
     models,
     pre_tokenizers,
@@ -6,7 +9,14 @@ from tokenizers import (
 )
 from transformers import PreTrainedTokenizerFast
 
-DNA_PAIRS = {
+DNA_PAIRS_FOR_REF = {
+    "AA",
+    "TT",
+    "CC",
+    "GG",
+}
+
+DNA_PAIRS_FOR_ALT = {
     "AA",
     "AC",
     "AG",
@@ -40,26 +50,20 @@ def get_vocabulary_dict() -> dict[str, int]:
         UNK_TOKEN_STR: 3,
         CLS_TOKEN_STR: 4,
     }
-    for pair in sorted(DNA_PAIRS):
-        for pair2 in sorted(DNA_PAIRS):
+    for pair in sorted(DNA_PAIRS_FOR_REF):
+        for pair2 in sorted(DNA_PAIRS_FOR_ALT):
             token_to_id[pair + pair2] = len(token_to_id)
 
     return token_to_id
 
 
-def get_tokenizer() -> PreTrainedTokenizerFast:
-
-    tokenizer = Tokenizer(
-        model=models.WordLevel(
-            vocab=get_vocabulary_dict(),
-            unk_token=UNK_TOKEN_STR,
-        )
-    )
-
+def _wrap_tokenizer(tokenizer: Tokenizer) -> PreTrainedTokenizerFast:
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
 
     bos_token_id = tokenizer.token_to_id(BOS_TOKEN_STR)
     eos_token_id = tokenizer.token_to_id(EOS_TOKEN_STR)
+    pad_token_id = tokenizer.token_to_id(PAD_TOKEN_STR)
+    unk_token_id = tokenizer.token_to_id(UNK_TOKEN_STR)
     cls_token_id = tokenizer.token_to_id(CLS_TOKEN_STR)
 
     tokenizer.post_processor = processors.TemplateProcessing(
@@ -68,16 +72,48 @@ def get_tokenizer() -> PreTrainedTokenizerFast:
             (cls_token_id, CLS_TOKEN_STR),
             (bos_token_id, BOS_TOKEN_STR),
             (eos_token_id, EOS_TOKEN_STR),
+            (pad_token_id, PAD_TOKEN_STR),
+            (unk_token_id, UNK_TOKEN_STR),
         ],
     )
 
-    wrapped_tokenizer = PreTrainedTokenizerFast(
+    return PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         unk_token=UNK_TOKEN_STR,
-        pad_token=PAD_TOKEN_STR,
         cls_token=CLS_TOKEN_STR,
+        pad_token=PAD_TOKEN_STR,
         bos_token=BOS_TOKEN_STR,
         eos_token=EOS_TOKEN_STR,
     )
 
-    return wrapped_tokenizer
+
+def get_one_snp_tokenizer() -> PreTrainedTokenizerFast:
+    tokenizer = Tokenizer(
+        model=models.WordLevel(
+            vocab=get_vocabulary_dict(),
+            unk_token=UNK_TOKEN_STR,
+        )
+    )
+    tokenizer = _wrap_tokenizer(tokenizer)
+    logger.info(
+        f"Tokenizer OneSNP loaded with vocab size: {len(tokenizer.get_vocab())}"
+    )
+    return tokenizer
+
+
+def get_one_snp_bpe_tokenizer(tokenizer_path: Path) -> PreTrainedTokenizerFast:
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    tokenizer = _wrap_tokenizer(tokenizer)
+    logger.info(
+        f"Tokenizer loaded from {tokenizer_path} with vocab size: {len(tokenizer.get_vocab())}"
+    )
+    return tokenizer
+
+
+def get_tokenizer(
+    tokenizer_path: Optional[Path] = None,
+) -> PreTrainedTokenizerFast:
+    if tokenizer_path is None:
+        return get_one_snp_tokenizer()
+    else:
+        return get_one_snp_bpe_tokenizer(tokenizer_path)

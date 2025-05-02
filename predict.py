@@ -5,7 +5,7 @@ from tqdm import tqdm
 import typer
 
 from adn.data import DatasetMode, load_datasets
-from adn.models.bert import DnaBertForSequenceClassification
+from adn.models.base_models.bert import DnaBertForSequenceClassification
 from adn.prediction import Predictor
 
 
