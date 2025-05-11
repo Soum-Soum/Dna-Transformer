@@ -23,6 +23,11 @@ class PathHelper:
         return self.base_dir / "main_alleles"
 
     @property
+    def ds_cache_dir(self) -> Path:
+        """Directory where the dataset cache is stored."""
+        return self.base_dir / "ds_cache"
+
+    @property
     def snp_per_individual_dir(self) -> Path:
         """Directory where SNPs per individual are stored."""
         return self.base_dir / "snp_per_individual"

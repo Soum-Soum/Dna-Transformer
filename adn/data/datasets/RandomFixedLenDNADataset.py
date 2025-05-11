@@ -34,4 +34,6 @@ class RandomFixedLenDNADataset(DNADataset):
         snp_idx = random.randint(
             0, self.reference_genome.shape[0] - self.sequence_length
         )
-        return self.get_sequence_dict(individual, snp_idx)
+
+        sub_ref_updated = self._extract_individual_subsequence(individual, snp_idx)
+        return self._subsequence_to_dict(sub_ref_updated, individual)

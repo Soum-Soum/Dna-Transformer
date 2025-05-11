@@ -4,7 +4,12 @@ from tqdm import tqdm
 import typer
 
 from adn.data.data import DatasetMode, load_datasets
-from adn.models.tokenizer import UNK_TOKEN_STR, BOS_TOKEN_STR, EOS_TOKEN_STR, CLS_TOKEN_STR
+from adn.models.tokenizer import (
+    UNK_TOKEN_STR,
+    BOS_TOKEN_STR,
+    EOS_TOKEN_STR,
+    CLS_TOKEN_STR,
+)
 from adn.utils.paths_utils import PathHelper
 
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers

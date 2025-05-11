@@ -1,69 +1,60 @@
-from pathlib import Path
-from typing import Optional
 from loguru import logger
-from tqdm import tqdm
+from tqdm import TqdmExperimentalWarning, tqdm
 import typer
 
-from adn.data import DatasetMode, load_datasets
+from adn.data.data import DatasetMode, load_datasets
 from adn.models.transformers.bert import DnaBertForSequenceClassification
 from adn.prediction import Predictor
-
+from adn.utils.paths_utils import PathHelper
+from adn.cli.common_args import ModelCommonArgs
 
 app = typer.Typer()
 
 
 @app.command()
-def predict(
-    individuals_snp_dir: str = typer.Option(
-        ..., help="Directory containing individuals SNPs."
-    ),
-    metadata_path: str = typer.Option(..., help="Path to metadata file."),
-    output_dir: Optional[str] = typer.Option(
-        None, help="Directory to save predictions."
-    ),
-    sequence_length: int = typer.Option(128, help="Length of each sequence."),
-    batch_size: int = typer.Option(256, help="Batch size for training and evaluation."),
-    labels_to_remove: Optional[str] = typer.Option(
-        None, help="Labels to remove from metadata."
-    ),
-    checkpoint_dir: Optional[str] = typer.Option(
-        None, help="Path to the checkpoint directory."
-    ),
-    individuals_to_ignore: Optional[str] = typer.Option(
-        None, help="List of individuals to ignore during training."
-    ),
+class Predict(ModelCommonArgs):
+    """
+    Predict using a trained model.
+    """
+
     overlaping_ratio: float = typer.Option(
-        0.5, help="Overlapping ratio between 2 consecutive sequences."
-    ),
-):
-    ds, _ = load_datasets(
-        individuals_snp_dir=Path(individuals_snp_dir),
-        metadata_path=Path(metadata_path),
-        sequence_length=sequence_length,
-        train_eval_split=0,
-        data_ratio_to_use=1,
-        mode=DatasetMode.SEQUENTIAL_FIXED_LEN,
-        labels_to_remove=labels_to_remove,
-        individual_to_ignore=individuals_to_ignore,
-        overlaping_ratio=overlaping_ratio,
+        0.5,
+        help="Overlapping ratio for sequences (0.0 to 1.0).",
     )
 
-    model = DnaBertForSequenceClassification.from_pretrained(checkpoint_dir)
+    def model_post_init(self, _):
+        ds, _ = load_datasets(
+            path_helper=PathHelper(
+                self.base_dir, custom_metadata_file=self.metadata_file
+            ),
+            sequence_length=self.sequence_length,
+            train_eval_split=0,
+            data_ratio_to_use=1,
+            mode=DatasetMode.SEQUENTIAL_FIXED_LEN,
+            labels_to_remove=self.labels_to_remove,
+            individual_to_ignore=self.individuals_to_ignore,
+            overlaping_ratio=self.overlaping_ratio,
+        )
 
-    predictor = Predictor(
-        model=model,
-        batch_size=batch_size,
-        output_dir=(
-            Path(output_dir)
-            if output_dir
-            else Path(checkpoint_dir).parent.parent / "predictions"
-        ),
-    )
+        model = DnaBertForSequenceClassification.from_pretrained(self.checkpoint_dir)
 
-    predictor.predict_and_save(ds)
+        predictor = Predictor(
+            model=model,
+            batch_size=self.batch_size,
+            output_dir=(
+                self.output_dir
+                if self.output_dir
+                else self.checkpoint_dir.parent.parent / "predictions"
+            ),
+        )
+
+        predictor.predict_and_save(ds)
 
 
 if __name__ == "__main__":
+    import warnings
+
+    warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 
     logger_format = (
         "<green>{time:YYYY-MM-DD at HH:mm:ss}</green> | "

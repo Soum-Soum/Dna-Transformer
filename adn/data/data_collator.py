@@ -6,11 +6,14 @@ from transformers import PreTrainedTokenizerFast
 def data_collator(features: list, tokenizer: PreTrainedTokenizerFast) -> dict:
     input_ids = []
     labels = []
-    chromosome_positions = []
+    snp_positions = []
+    snp_ids = []
     for f in features:
         input_ids.append(tokenizer.encode(f["input_ids"]))
         labels.append(f["labels"])
-        chromosome_positions.append(f["chromosome_positions"])
+        snp_positions.append(f["snp_positions"])
+        snp_ids.append(f["snp_ids"])
+
     max_length = max(len(ids) for ids in input_ids)
     input_ids = torch.tensor(
         [ids + [tokenizer.pad_token_id] * (max_length - len(ids)) for ids in input_ids]
@@ -18,9 +21,11 @@ def data_collator(features: list, tokenizer: PreTrainedTokenizerFast) -> dict:
 
     attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
-    chromosome_positions = torch.tensor(chromosome_positions).long()
+    snp_positions = torch.tensor(snp_positions).long()
 
-    input_ids = torch.cat([input_ids, chromosome_positions], dim=1)
+    snp_ids = torch.tensor(snp_ids).long()
+
+    input_ids = torch.cat([input_ids, snp_positions, snp_ids], dim=1)
     labels = torch.tensor(labels)
 
     return {

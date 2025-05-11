@@ -19,6 +19,7 @@ class DnaModernBertConfig(ModernBertConfig):
     def __init__(
         self,
         max_position: int = None,
+        snp_count: int = None,
         activation_shaping: bool = False,
         activation_shaping_pruning_level: float = 0.5,
         class_weights: Optional[list[float]] = None,
@@ -26,6 +27,7 @@ class DnaModernBertConfig(ModernBertConfig):
     ):
         super().__init__(**kwargs)
         self.max_position = max_position
+        self.snp_count = snp_count
         self.activation_shaping = activation_shaping
         self.activation_shaping_pruning_level = activation_shaping_pruning_level
         self.class_weights = class_weights
@@ -60,6 +62,39 @@ class DnaModernBertEmbeddings(ModernBertEmbeddings):
         )
 
 
+class DnaModernBertEmbeddingsV2(ModernBertEmbeddings):
+    """Construct the embeddings from word, position and token_type embeddings."""
+
+    def __init__(self, config: DnaModernBertConfig):
+        super().__init__(config)
+        self.snp_embeddings = nn.Embedding(
+            num_embeddings=config.snp_count,
+            embedding_dim=config.hidden_size,
+        )
+        self.snp_position_embeddings = nn.Linear(1, config.hidden_size)
+        self.max_position = config.max_position
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        input_ids, snp_position, snp_ids = input_ids.chunk(3, dim=1)
+
+        snp_embeddings = self.snp_embeddings(snp_ids)
+        snp_position = snp_position.float().unsqueeze(-1) / self.max_position
+        snp_position_embeddings = self.snp_position_embeddings(snp_position)
+        token_embeddings = self.tok_embeddings(input_ids)
+
+        input_embeddings = token_embeddings + snp_embeddings + snp_position_embeddings
+
+        return super().forward(
+            input_ids=input_ids,
+            inputs_embeds=input_embeddings,
+        )
+
+
 class ActivationShapingModernBertPredictionHead(ModernBertPredictionHead):
 
     def __init__(self, config: DnaModernBertConfig):
@@ -87,7 +122,9 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
 
     def __init__(self, config: DnaModernBertConfig):
         super().__init__(config)
-        self.model.embeddings = DnaModernBertEmbeddings(config)
+        # self.model.embeddings = DnaModernBertEmbeddings(config)
+        self.model.embeddings = DnaModernBertEmbeddingsV2(config)
+
         self.class_weights = (
             torch.tensor(config.class_weights, dtype=torch.float32)
             if config.class_weights is not None
@@ -103,7 +140,7 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
             output_attentions=kwargs.get("output_attentions"),
             output_hidden_states=kwargs.get("output_hidden_states"),
             return_dict=kwargs.get("return_dict"),
-            seq_len=kwargs.get("input_ids").shape[1] // 2,
+            seq_len=kwargs.get("input_ids").shape[1] // 3,
         )
 
     def _classify(

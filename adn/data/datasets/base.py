@@ -45,6 +45,8 @@ class DNADataset(Dataset):
         self.individuals = sorted(self.metadata_df.index.to_list())
         self.snp_per_individual = load_snp_per_individual(path_helper, self.individuals)
         self.reference_genome = load_ref_genome(path_helper)
+        self.id_to_postion = self.reference_genome["position"].to_pandas().to_dict()
+        self.position_to_id = {v: k for k, v in self.id_to_postion.items()}
         self.sequence_length = sequence_length
         self.max_position = self.reference_genome["position"].max()
         self.label_to_id = label_to_id
@@ -61,12 +63,17 @@ class DNADataset(Dataset):
             y=self.metadata_df["label"],
         )
 
+    @property
+    def snp_count(self) -> int:
+        return len(self.id_to_postion)
+
     def _extract_individual_subsequence(
         self, individual: str, snp_idx: int
     ) -> pl.DataFrame:
         sub_ref = self.reference_genome[snp_idx : snp_idx + self.sequence_length]
         start_pos = sub_ref["position"][0]
         end_pos = sub_ref["position"][-1]
+
         individual_df = self.snp_per_individual[individual]
         sub_individual = individual_df.filter(
             (individual_df["position"] >= start_pos)
@@ -81,15 +88,17 @@ class DNADataset(Dataset):
         return sub_ref_updated
 
     def _subsequence_to_dict(self, sub_df: pl.DataFrame, individual: str) -> dict:
-        chromosome_positions = sub_df["position"].to_numpy().astype(np.float32).tolist()
-        chromosome_positions = sum(
+        snp_positions = sub_df["position"].to_numpy().astype(np.int32).tolist()
+        snp_positions = sum(
             [
-                [chromosome_positions[0]],
-                chromosome_positions,
-                [chromosome_positions[-1]],
+                [snp_positions[0]],
+                snp_positions,
+                [snp_positions[-1]],
             ],
             [],
         )
+
+        snp_ids = [self.position_to_id[(position)] for position in snp_positions]
 
         sequence = (
             sub_df[["main_allele", "allele"]]
@@ -106,11 +115,8 @@ class DNADataset(Dataset):
         return {
             "input_ids": sequence,
             "labels": label_id,
-            "chromosome_positions": chromosome_positions,
-            "interval": (chromosome_positions[0], chromosome_positions[-1]),
+            "snp_positions": snp_positions,
+            "snp_ids": snp_ids,
+            "interval": (snp_positions[0], snp_positions[-1]),
             "individual": individual,
         }
-
-    def get_sequence_dict(self, individual: str, snp_idx: int) -> dict:
-        sub_ref_updated = self._extract_individual_subsequence(individual, snp_idx)
-        return self._subsequence_to_dict(sub_ref_updated, individual)
