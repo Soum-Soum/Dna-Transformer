@@ -67,6 +67,10 @@ class DNADataset(Dataset):
     def snp_count(self) -> int:
         return len(self.id_to_postion)
 
+    def get_label(self, individual: str) -> int:
+        label = self.metadata_df.loc[individual, "label"]
+        return self.label_to_id[label]
+
     def _extract_individual_subsequence(
         self, individual: str, snp_idx: int
     ) -> pl.DataFrame:
@@ -109,8 +113,7 @@ class DNADataset(Dataset):
         )
         sequence = " ".join(sequence)
 
-        label = self.metadata_df.loc[individual, "label"]
-        label_id = self.label_to_id[label]
+        label_id = self.get_label(individual)
 
         return {
             "input_ids": sequence,

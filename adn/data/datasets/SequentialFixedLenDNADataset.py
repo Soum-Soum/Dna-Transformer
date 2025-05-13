@@ -1,3 +1,4 @@
+import hashlib
 import polars as pl
 from tqdm.rich import tqdm
 from adn.data.datasets.base import DNADataset
@@ -6,6 +7,8 @@ from adn.utils.paths_utils import PathHelper
 
 import pandas as pd
 from loguru import logger
+
+REFERENCE_STR = "reference"
 
 
 class SequentialFixedLenDNADataset(DNADataset):
@@ -29,14 +32,14 @@ class SequentialFixedLenDNADataset(DNADataset):
         self.individual_pos_pairs = self.get_individuals_pos_pairs()
 
     def _save_pairs(self, pairs: list[tuple[str, int]]):
-        logger.info("Saving pairs to file")
+        logger.info(f"Saving pairs to file {self.cache_save_path}")
         self.cache_save_path.parent.mkdir(parents=True, exist_ok=True)
         pairs_df = pd.DataFrame(pairs, columns=["individual", "snp"])
         pairs_df.to_csv(self.cache_save_path, index=False)
         logger.info(f"Saved pairs to {self.cache_save_path}")
 
     def _load_pairs(self) -> list[tuple[str, int]]:
-        logger.info("Loading pairs from file")
+        logger.info(f"Loading pairs from file {self.cache_save_path}")
         pairs_df = pd.read_csv(self.cache_save_path)
         pairs = list(zip(pairs_df["individual"], pairs_df["snp"]))
         logger.info(f"Loaded pairs from {self.cache_save_path}")
@@ -46,6 +49,10 @@ class SequentialFixedLenDNADataset(DNADataset):
 
         if self.cache_save_path.exists():
             return self._load_pairs()
+        else:
+            logger.info(
+                f"Cache file {self.cache_save_path} does not exist. Generating pairs..."
+            )
 
         offsets = list(
             range(
@@ -67,7 +74,7 @@ class SequentialFixedLenDNADataset(DNADataset):
                     self.sequence_length,
                 )
             )
-            pairs.extend(list(zip(["reference"] * len(real_seq_id), real_seq_id)))
+            pairs.extend(list(zip([REFERENCE_STR] * len(real_seq_id), real_seq_id)))
 
         for individual in tqdm(
             self.individuals, desc="Processing pairs...", unit="individual"
@@ -106,14 +113,27 @@ class SequentialFixedLenDNADataset(DNADataset):
         self._save_pairs(pairs)
         return pairs
 
-    def __hash__(self):
-        return hash(
-            (
-                tuple(self.metadata_df.reset_index()["individual"]),
-                self.sequence_length,
-                self.overlaping_ratio,
+    def _extract_individual_subsequence(
+        self, individual: str, snp_idx: int
+    ) -> pl.DataFrame:
+        if individual != REFERENCE_STR:
+            return super()._extract_individual_subsequence(
+                individual=individual, snp_idx=snp_idx
             )
-        )
+
+        sub_ref = self.reference_genome[snp_idx : snp_idx + self.sequence_length]
+        return sub_ref.with_columns(pl.col("main_allele").alias("allele"))
+
+    def get_label(self, individual: str) -> int:
+        if individual == REFERENCE_STR:
+            return 0
+        return super().get_label(individual)
+
+    def __hash__(self):
+        individuals = sorted(self.metadata_df.reset_index()["individual"].to_list())
+        individual_str = "_".join(individuals)
+        s = f"{individual_str}|{self.sequence_length}|{self.overlaping_ratio}"
+        return int(hashlib.md5(s.encode()).hexdigest(), 16)
 
     def __len__(self) -> int:
         return len(self.individual_pos_pairs)

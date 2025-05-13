@@ -1,9 +1,12 @@
 from loguru import logger
 from tqdm import TqdmExperimentalWarning, tqdm
+from transformers import PreTrainedTokenizerFast
 import typer
 
 from adn.data.data import DatasetMode, load_datasets
+from adn.data.data_collator import get_data_collator
 from adn.models.transformers.bert import DnaBertForSequenceClassification
+from adn.models.transformers.modern_bert import DnaModernBertForSequenceClassification
 from adn.prediction import Predictor
 from adn.utils.paths_utils import PathHelper
 from adn.cli.common_args import ModelCommonArgs
@@ -23,6 +26,22 @@ class Predict(ModelCommonArgs):
     )
 
     def model_post_init(self, _):
+
+        if self.model_type == "bert":
+            model_class = DnaBertForSequenceClassification
+        else:
+            model_class = DnaModernBertForSequenceClassification
+        model = model_class.from_pretrained(
+            self.checkpoint_dir,
+        )
+
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=str(self.checkpoint_dir.parent.parent / "tokenizer.json")
+        )
+        data_collator = get_data_collator(
+            tokenizer=tokenizer,
+        )
+
         ds, _ = load_datasets(
             path_helper=PathHelper(
                 self.base_dir, custom_metadata_file=self.metadata_file
@@ -36,8 +55,6 @@ class Predict(ModelCommonArgs):
             overlaping_ratio=self.overlaping_ratio,
         )
 
-        model = DnaBertForSequenceClassification.from_pretrained(self.checkpoint_dir)
-
         predictor = Predictor(
             model=model,
             batch_size=self.batch_size,
@@ -46,6 +63,7 @@ class Predict(ModelCommonArgs):
                 if self.output_dir
                 else self.checkpoint_dir.parent.parent / "predictions"
             ),
+            data_collator=data_collator,
         )
 
         predictor.predict_and_save(ds)

@@ -1,4 +1,5 @@
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 from loguru import logger
 import numpy as np
@@ -7,11 +8,10 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm.rich import tqdm
 
-from adn.data import data_collator
 from adn.data.datasets.base import DNADataset
 
 
-def collate_fn(features: list):
+def collate_fn(features: list, data_collator: callable) -> tuple:
     predictions_batch = data_collator(features)
     individuals = [f["individual"] for f in features]
     intervals = [f["interval"] for f in features]
@@ -24,18 +24,25 @@ def compute_ennergy_score(logits: torch.Tensor) -> torch.Tensor:
 
 class Predictor:
 
-    def __init__(self, model: torch.nn.Module, output_dir: Path, batch_size: int = 256):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        output_dir: Path,
+        data_collator: callable,
+        batch_size: int = 256,
+    ):
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True, parents=True)
         self.batch_size = batch_size
         self.model = model.eval().cuda()
+        self.data_collator = data_collator
 
     def _build_dataloader(self, dataset: Dataset) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            collate_fn=collate_fn,
+            collate_fn=partial(collate_fn, data_collator=self.data_collator),
             num_workers=1,
         )
 

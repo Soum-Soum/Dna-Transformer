@@ -23,6 +23,9 @@ class ModelCommonArgs(BaseModel):
     individuals_to_ignore: Optional[Path] = typer.Option(
         None, help="List of individuals to ignore during training."
     )
+    model_type: str = typer.Option(
+        "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
+    )
 
     @field_serializer(
         "base_dir",

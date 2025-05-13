@@ -44,9 +44,6 @@ class Train(ModelCommonArgs):
     model_dim: int = typer.Option(
         128, help="Dimensionality of the model (hidden size)."
     )
-    model_type: str = typer.Option(
-        "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
-    )
     tokenizer_path: Optional[Path] = typer.Option(
         None, help="Path to the tokenizer file."
     )
@@ -71,6 +68,7 @@ class Train(ModelCommonArgs):
                 json.dump(self.model_dump(), f, indent=4)
 
             tokenizer = get_tokenizer(self.tokenizer_path)
+            tokenizer.save_pretrained(output_dir)
 
             train_ds, eval_ds = load_datasets(
                 path_helper=PathHelper(
@@ -105,7 +103,7 @@ class Train(ModelCommonArgs):
                     hidden_dropout_prob=0,
                     attention_probs_dropout_prob=0,
                 )
-                the_constructor = DnaBertForSequenceClassification
+                model_class = DnaBertForSequenceClassification
             else:
                 config = DnaModernBertConfig(
                     **common_config_args,
@@ -113,18 +111,18 @@ class Train(ModelCommonArgs):
                     pad_token_id=tokenizer.pad_token_id,
                 )
 
-                the_constructor = DnaModernBertForSequenceClassification
+                model_class = DnaModernBertForSequenceClassification
 
             if self.checkpoint_dir is None:
                 logger.info(
                     "No checkpoint provided, creating a new model and training from scratch."
                 )
-                model = the_constructor(config)
+                model = model_class(config)
             else:
                 logger.info(
                     f"Loading checkpoint from {self.checkpoint_dir} and resuming training."
                 )
-                model = the_constructor.from_pretrained(
+                model = model_class.from_pretrained(
                     self.checkpoint_dir,
                     config=config,
                     ignore_mismatched_sizes=True,
