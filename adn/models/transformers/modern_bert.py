@@ -2,6 +2,7 @@ from typing import Optional
 from loguru import logger
 import torch
 from transformers import ModernBertConfig
+from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.modernbert.modeling_modernbert import (
     ModernBertEmbeddings,
     ModernBertForSequenceClassification,
@@ -132,8 +133,8 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
         )
         self.head = ActivationShapingModernBertPredictionHead(config)
 
-    def _embeddings(self, **kwargs) -> BaseModelOutput:
-        return self.model(
+    def _embeddings(self, **kwargs) -> BaseModelOutputWithPooling:
+        base_model_prediction: BaseModelOutput = self.model(
             input_ids=kwargs.get("input_ids"),
             attention_mask=kwargs.get("attention_mask"),
             position_ids=kwargs.get("position_ids"),
@@ -142,17 +143,23 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
             return_dict=kwargs.get("return_dict"),
             seq_len=kwargs.get("input_ids").shape[1] // 3,
         )
-
-    def _classify(
-        self, outputs: BaseModelOutput, labels=None
-    ) -> SequenceClassifierOutput:
-        last_hidden_state = outputs[0]
-
+        last_hidden_state = base_model_prediction[0]
         last_hidden_state = last_hidden_state[:, 0]
 
-        pooled_output = self.head(last_hidden_state)
-        pooled_output = self.drop(pooled_output)
-        logits = self.classifier(pooled_output)
+        pooler_output = self.drop(self.head(last_hidden_state))
+
+        return BaseModelOutputWithPooling(
+            last_hidden_state=base_model_prediction.last_hidden_state,
+            pooler_output=pooler_output,
+            hidden_states=base_model_prediction.hidden_states,
+            attentions=base_model_prediction.attentions,
+        )
+
+    def _classify(
+        self, outputs: BaseModelOutputWithPooling, labels=None
+    ) -> SequenceClassifierOutput:
+
+        logits = self.classifier(outputs.pooler_output)
 
         loss_fct = nn.CrossEntropyLoss(weight=self.class_weights.to(labels.device))
         loss = (

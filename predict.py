@@ -1,3 +1,4 @@
+import traceback
 from loguru import logger
 from tqdm import TqdmExperimentalWarning, tqdm
 from transformers import PreTrainedTokenizerFast
@@ -26,47 +27,53 @@ class Predict(ModelCommonArgs):
     )
 
     def model_post_init(self, _):
+        try:
+            if self.model_type == "bert":
+                model_class = DnaBertForSequenceClassification
+            else:
+                model_class = DnaModernBertForSequenceClassification
+            model = model_class.from_pretrained(
+                self.checkpoint_dir,
+            )
 
-        if self.model_type == "bert":
-            model_class = DnaBertForSequenceClassification
-        else:
-            model_class = DnaModernBertForSequenceClassification
-        model = model_class.from_pretrained(
-            self.checkpoint_dir,
-        )
+            tokenizer = PreTrainedTokenizerFast.from_pretrained(
+                str(self.checkpoint_dir.parent.parent),
+            )
 
-        tokenizer = PreTrainedTokenizerFast(
-            tokenizer_file=str(self.checkpoint_dir.parent.parent / "tokenizer.json")
-        )
-        data_collator = get_data_collator(
-            tokenizer=tokenizer,
-        )
+            data_collator = get_data_collator(
+                tokenizer=tokenizer,
+            )
 
-        ds, _ = load_datasets(
-            path_helper=PathHelper(
-                self.base_dir, custom_metadata_file=self.metadata_file
-            ),
-            sequence_length=self.sequence_length,
-            train_eval_split=0,
-            data_ratio_to_use=1,
-            mode=DatasetMode.SEQUENTIAL_FIXED_LEN,
-            labels_to_remove=self.labels_to_remove,
-            individual_to_ignore=self.individuals_to_ignore,
-            overlaping_ratio=self.overlaping_ratio,
-        )
+            ds, _ = load_datasets(
+                path_helper=PathHelper(
+                    self.base_dir, custom_metadata_file=self.metadata_file
+                ),
+                sequence_length=self.sequence_length,
+                train_eval_split=0,
+                data_ratio_to_use=1,
+                mode=DatasetMode.SEQUENTIAL_FIXED_LEN,
+                labels_to_remove=self.labels_to_remove,
+                individual_to_ignore=self.individuals_to_ignore,
+                overlaping_ratio=self.overlaping_ratio,
+            )
 
-        predictor = Predictor(
-            model=model,
-            batch_size=self.batch_size,
-            output_dir=(
-                self.output_dir
-                if self.output_dir
-                else self.checkpoint_dir.parent.parent / "predictions"
-            ),
-            data_collator=data_collator,
-        )
+            predictor = Predictor(
+                model=model,
+                batch_size=self.batch_size,
+                output_dir=(
+                    self.output_dir
+                    if self.output_dir
+                    else self.checkpoint_dir.parent.parent / "predictions"
+                ),
+                data_collator=data_collator,
+            )
 
-        predictor.predict_and_save(ds)
+            predictor.predict_and_save(ds)
+        except Exception as e:
+            logger.error(
+                f"Error during training: {e}. Traceback: {traceback.format_exc()}"
+            )
+            raise e
 
 
 if __name__ == "__main__":

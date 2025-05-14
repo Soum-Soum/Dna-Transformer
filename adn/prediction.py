@@ -43,7 +43,7 @@ class Predictor:
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=partial(collate_fn, data_collator=self.data_collator),
-            num_workers=1,
+            # num_workers=1,
         )
 
     def _results_to_df(self, results: list, ds: DNADataset) -> pd.DataFrame:

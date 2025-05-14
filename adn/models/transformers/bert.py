@@ -124,7 +124,7 @@ class DnaBertEmbeddingsV2(BertEmbeddings):
         snp_position = snp_position.float().unsqueeze(-1) / self.max_position
         snp_position_embeddings = self.snp_position_embeddings(snp_positions)
 
-        embeddings = inputs_embeds + snp_embeddings  # + token_type_embeddings
+        embeddings = inputs_embeds + snp_embeddings + snp_position_embeddings
 
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
