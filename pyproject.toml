@@ -22,6 +22,7 @@ dependencies = [
     "evaluate>=0.4.3",
     "tensorboard>=2.19.0",
     "tensorboardx>=2.6.2.2",
+    "standard-imghdr>=3.13.0",
 ]
 
 [tool.uv.sources]

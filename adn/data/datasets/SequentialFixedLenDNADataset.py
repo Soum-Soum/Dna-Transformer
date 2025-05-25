@@ -2,6 +2,7 @@ import hashlib
 import polars as pl
 from tqdm.rich import tqdm
 from adn.data.datasets.base import DNADataset
+from adn.data.metadata import Metadata
 from adn.utils.paths_utils import PathHelper
 
 
@@ -15,16 +16,18 @@ class SequentialFixedLenDNADataset(DNADataset):
 
     def __init__(
         self,
-        metadata_df: pd.DataFrame,
+        metadata: Metadata,
         path_helper: PathHelper,
         label_to_id: dict[str, int],
+        label_to_family: dict[str, str],
         sequence_length: int,
         overlaping_ratio: float,
     ):
         super().__init__(
-            metadata_df=metadata_df,
+            metadata=metadata,
             path_helper=path_helper,
             label_to_id=label_to_id,
+            label_to_family=label_to_family,
             sequence_length=sequence_length,
         )
         self.overlaping_ratio = overlaping_ratio
@@ -44,79 +47,6 @@ class SequentialFixedLenDNADataset(DNADataset):
         logger.info(f"Loaded pairs from {self.cache_save_path}")
         return pairs_df
 
-    # def _get_individuals_pos_pairs(self) -> list[tuple[str, int]]:
-
-    #     if self.cache_save_path.exists():
-    #         return self._load_pairs()
-    #     else:
-    #         logger.info(
-    #             f"Cache file {self.cache_save_path} does not exist. Generating pairs..."
-    #         )
-
-    #     offsets = list(
-    #         range(
-    #             0,
-    #             self.sequence_length,
-    #             int(round(self.sequence_length * self.overlaping_ratio)),
-    #         )
-    #     )
-
-    #     reference = self.reference_genome
-
-    #     pairs = []
-
-    #     for offset in offsets:
-    #         stop = self.reference_genome.shape[0] - offset
-    #         stop = stop - (stop % self.sequence_length)
-    #         real_seq_id = list(
-    #             range(
-    #                 offset,
-    #                 stop,
-    #                 self.sequence_length,
-    #             )
-    #         )
-    #         pairs.extend(list(zip([REFERENCE_STR] * len(real_seq_id), real_seq_id)))
-
-    #     for individual in tqdm(
-    #         self.individuals, desc="Processing pairs...", unit="individual"
-    #     ):
-    #         indiv_df = self.snp_per_individual[individual]
-    #         joined = reference.join(
-    #             indiv_df[["allele", "position"]], on="position", how="left"
-    #         )
-
-    #         if "__index_level_0__" in joined.columns:
-    #             joined = joined.drop("__index_level_0__")
-
-    #         for offset in offsets:
-    #             slice_len = joined.shape[0] - offset
-    #             slice_len = slice_len - (slice_len % self.sequence_length)
-
-    #             sub_df = joined.slice(offset, None)
-
-    #             sub_df = sub_df.with_columns(
-    #                 pl.arange(0, sub_df.height)
-    #                 .floordiv(self.sequence_length)
-    #                 .alias("seq_id")
-    #             )
-
-    #             grouped = (
-    #                 sub_df.group_by("seq_id")
-    #                 .agg(pl.col("allele").drop_nulls().first().alias("allele"))
-    #                 .filter(pl.col("allele").is_not_null())
-    #                 .with_columns(
-    #                     (pl.col("seq_id") * self.sequence_length + offset).alias(
-    #                         "real_seq_id"
-    #                     )
-    #                 )
-    #                 .sort("seq_id")
-    #             )
-
-    #             pairs.extend([(individual, i) for i in grouped["real_seq_id"]])
-
-    #     self._save_pairs(pairs)
-    #     return pairs
-
     def _get_individuals_pos_pairs(self) -> list[tuple[str, int]]:
         if self.cache_save_path.exists():
             return self._load_pairs()
@@ -133,7 +63,7 @@ class SequentialFixedLenDNADataset(DNADataset):
 
         # Ajout des paires par individu
         for individual in tqdm(
-            self.individuals, desc="Processing pairs...", unit="individual"
+            self.metadata.individuals, desc="Processing pairs...", unit="individual"
         ):
             individual_pairs_df = self._generate_individual_pairs(individual, offsets)
             all_pairs_df = pl.concat(
@@ -227,7 +157,7 @@ class SequentialFixedLenDNADataset(DNADataset):
         return super().get_label(individual)
 
     def __hash__(self):
-        individuals = sorted(self.metadata_df.reset_index()["individual"].to_list())
+        individuals = sorted(self.metadata.individuals)
         individual_str = "_".join(individuals)
         s = f"{individual_str}|{self.sequence_length}|{self.overlaping_ratio}"
         return int(hashlib.md5(s.encode()).hexdigest(), 16)

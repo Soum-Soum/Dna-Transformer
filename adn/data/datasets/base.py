@@ -1,27 +1,33 @@
 from tqdm.rich import tqdm
+from adn.data.metadata import Metadata
 from adn.utils.paths_utils import PathHelper
 
 
 import numpy as np
 import pandas as pd
 import polars as pl
-from sklearn.utils import compute_class_weight
 from torch.utils.data import Dataset
 
 
 def load_snp_per_individual(
     path_helper: PathHelper, individuals: list[str]
 ) -> dict[str, pl.DataFrame]:
-    snp_parquet_files = list(
+
+    individuals_snp_files_paths = list(
         filter(
-            lambda x: x.stem in individuals,
-            path_helper.list_snps_per_individual_paths,
-        )
+            lambda x: x.exists(),
+            map(
+                lambda x: path_helper.snp_per_individual_dir / f"{x}.parquet",
+                individuals,
+            ),
+        ),
     )
-    iterrable = tqdm(snp_parquet_files, desc="Loading SNP data...")
-    dataframes = {
-        file.stem: pl.read_parquet(file, use_pyarrow=True) for file in iterrable
-    }
+
+    dataframes = {}
+    for file in tqdm(individuals_snp_files_paths, desc="Loading SNP data..."):
+        individual = file.stem
+        dataframes[individual] = pl.read_parquet(file, use_pyarrow=True)
+
     return dataframes
 
 
@@ -35,41 +41,30 @@ class DNADataset(Dataset):
 
     def __init__(
         self,
-        metadata_df: pd.DataFrame,
+        metadata: Metadata,
         path_helper: PathHelper,
         sequence_length: int,
-        label_to_id: dict[str, int],
     ):
         super().__init__()
-        self.metadata_df = metadata_df
-        self.individuals = sorted(self.metadata_df.index.to_list())
-        self.snp_per_individual = load_snp_per_individual(path_helper, self.individuals)
+        self.metadata = metadata
+        self.snp_per_individual = load_snp_per_individual(
+            path_helper, self.metadata.individuals
+        )
         self.reference_genome = load_ref_genome(path_helper)
         self.id_to_postion = self.reference_genome["position"].to_pandas().to_dict()
         self.position_to_id = {v: k for k, v in self.id_to_postion.items()}
         self.sequence_length = sequence_length
         self.max_position = self.reference_genome["position"].max()
-        self.label_to_id = label_to_id
-
-    @property
-    def id_to_label(self) -> dict[int, str]:
-        return {v: k for k, v in self.label_to_id.items()}
-
-    @property
-    def class_weights(self) -> np.ndarray:
-        return compute_class_weight(
-            "balanced",
-            classes=np.array(list(self.label_to_id.keys())),
-            y=self.metadata_df["label"],
-        )
 
     @property
     def snp_count(self) -> int:
         return len(self.id_to_postion)
 
-    def get_label(self, individual: str) -> int:
-        label = self.metadata_df.loc[individual, "label"]
-        return self.label_to_id[label]
+    def get_label(self, individual: str) -> tuple[int, int]:
+        label, family = self.metadata.metadata_df.loc[individual, ["label", "family"]]
+        label_id = self.metadata.label_to_id[label]
+        family_id = self.metadata.family_to_id[family]
+        return label_id, family_id
 
     def _extract_individual_subsequence(
         self, individual: str, snp_idx: int
@@ -113,11 +108,12 @@ class DNADataset(Dataset):
         )
         sequence = " ".join(sequence)
 
-        label_id = self.get_label(individual)
+        label_id, family_id = self.get_label(individual)
 
         return {
             "input_ids": sequence,
             "labels": label_id,
+            "family": family_id,
             "snp_positions": snp_positions,
             "snp_ids": snp_ids,
             "interval": (snp_positions[0], snp_positions[-1]),

@@ -30,7 +30,7 @@ class PathHelper:
     @property
     def snp_per_individual_dir(self) -> Path:
         """Directory where SNPs per individual are stored."""
-        return self.base_dir / "snp_per_individual"
+        return self.base_dir / "SNPs"
 
     @property
     def all_snp_file_path(self) -> Path:

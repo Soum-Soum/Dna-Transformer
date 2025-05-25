@@ -53,7 +53,7 @@ class Predict(ModelCommonArgs):
                 data_ratio_to_use=1,
                 mode=DatasetMode.SEQUENTIAL_FIXED_LEN,
                 labels_to_remove=self.labels_to_remove,
-                individual_to_ignore=self.individuals_to_ignore,
+                individuals_to_ignore=self.individuals_to_ignore,
                 overlaping_ratio=self.overlaping_ratio,
             )
 

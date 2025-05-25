@@ -10,9 +10,9 @@ def data_collator(features: list, tokenizer: PreTrainedTokenizerFast) -> dict:
     snp_ids = []
     for f in features:
         input_ids.append(tokenizer.encode(f["input_ids"]))
-        labels.append(f["labels"])
         snp_positions.append(f["snp_positions"])
         snp_ids.append(f["snp_ids"])
+        labels.append([f["labels"], f["family"]])
 
     max_length = max(len(ids) for ids in input_ids)
     input_ids = torch.tensor(

@@ -1,7 +1,7 @@
-from typing import Optional
+from typing import Optional, Self
 from loguru import logger
 import torch
-from transformers import ModernBertConfig
+from transformers import ModernBertConfig, PreTrainedTokenizerFast
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.modernbert.modeling_modernbert import (
     ModernBertEmbeddings,
@@ -12,6 +12,7 @@ from transformers.models.modernbert.modeling_modernbert import (
 )
 from torch import nn
 
+from adn.data.datasets.base import DNADataset
 from adn.models.activation_shaping import ActivationShapingS
 
 
@@ -24,6 +25,8 @@ class DnaModernBertConfig(ModernBertConfig):
         activation_shaping: bool = False,
         activation_shaping_pruning_level: float = 0.5,
         class_weights: Optional[list[float]] = None,
+        num_families: int = None,
+        family_class_weights: Optional[list[float]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -32,6 +35,31 @@ class DnaModernBertConfig(ModernBertConfig):
         self.activation_shaping = activation_shaping
         self.activation_shaping_pruning_level = activation_shaping_pruning_level
         self.class_weights = class_weights
+        self.num_families = num_families
+        self.family_class_weights = family_class_weights
+
+    @classmethod
+    def build(
+        cls,
+        ds: DNADataset,
+        tokenizer: PreTrainedTokenizerFast,
+        activation_shaping: bool,
+        activation_shaping_pruning_level: float,
+        **kwargs,
+    ) -> Self:
+        return cls(
+            vocab_size=tokenizer.vocab_size,
+            pad_token_id=tokenizer.pad_token_id,
+            num_labels=len(ds.metadata.label_to_id),
+            class_weights=ds.metadata.class_weights.tolist(),
+            num_families=len(ds.metadata.family_to_id),
+            family_class_weights=ds.metadata.family_class_weights.tolist(),
+            max_position=ds.max_position,
+            snp_count=ds.snp_count,
+            activation_shaping=activation_shaping,
+            activation_shaping_pruning_level=activation_shaping_pruning_level,
+            **kwargs,
+        )
 
 
 class DnaModernBertEmbeddings(ModernBertEmbeddings):
@@ -125,12 +153,22 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
         super().__init__(config)
         # self.model.embeddings = DnaModernBertEmbeddings(config)
         self.model.embeddings = DnaModernBertEmbeddingsV2(config)
+        self.family_classifier = nn.Linear(config.hidden_size, config.num_families)
 
-        self.class_weights = (
-            torch.tensor(config.class_weights, dtype=torch.float32)
-            if config.class_weights is not None
-            else torch.tensor([1.0] * config.num_labels, dtype=torch.float32)
-        )
+        if config.class_weights is not None:
+            self.logits_loss_fct = nn.CrossEntropyLoss(
+                weight=torch.tensor(config.class_weights, dtype=torch.float32)
+            )
+        else:
+            self.logits_loss_fct = nn.CrossEntropyLoss()
+
+        if config.family_class_weights is not None:
+            self.family_loss_fct = nn.CrossEntropyLoss(
+                weight=torch.tensor(config.family_class_weights, dtype=torch.float32)
+            )
+        else:
+            self.family_loss_fct = nn.CrossEntropyLoss()
+
         self.head = ActivationShapingModernBertPredictionHead(config)
 
     def _embeddings(self, **kwargs) -> BaseModelOutputWithPooling:
@@ -161,12 +199,18 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
 
         logits = self.classifier(outputs.pooler_output)
 
-        loss_fct = nn.CrossEntropyLoss(weight=self.class_weights.to(labels.device))
-        loss = (
-            loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            if labels is not None
-            else None
-        )
+        if labels is not None:
+            family_logits = self.family_classifier(outputs.pooler_output)
+
+            labels_ids, family_ids = torch.split(labels, 1, dim=1)
+
+            loss = self.logits_loss_fct(
+                logits.view(-1, logits.shape[-1]), labels_ids.view(-1)
+            ) + self.family_loss_fct(
+                family_logits.view(-1, family_logits.shape[-1]), family_ids.view(-1)
+            )
+        else:
+            loss = None
 
         return SequenceClassifierOutput(
             loss=loss,

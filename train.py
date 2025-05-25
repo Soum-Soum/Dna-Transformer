@@ -10,6 +10,8 @@ import torch
 import numpy as np
 from adn.data.data import DatasetMode, load_datasets
 from adn.data.data_collator import get_data_collator
+from adn.data.datasets.base import DNADataset
+from adn.eval.metrics import MetricCalculator
 from adn.models.tokenizer import get_tokenizer
 from adn.plots import plot_trainer_logs
 from adn.models.transformers.bert import DnaBertConfig, DnaBertForSequenceClassification
@@ -17,32 +19,56 @@ from adn.models.transformers.modern_bert import (
     DnaModernBertConfig,
     DnaModernBertForSequenceClassification,
 )
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, PreTrainedTokenizerFast
 import evaluate
 
 from adn.utils.paths_utils import PathHelper
-from adn.cli.common_args import ModelCommonArgs
 
 app = typer.Typer()
 
 
 @app.command()
-class Train(ModelCommonArgs):
+class Train(BaseModel):
     """
     Launch a training run for the model.
     """
 
+    base_dir: Path = typer.Option(help="Base data directory containing the dataset.")
+    metadata_file: Optional[Path] = typer.Option(
+        None, help="Path to the metadata file to use (will override the default one)."
+    )
+    output_dir: Path = typer.Option(
+        Path("output"), help="Directory to save model checkpoints."
+    )
     run_name: str = typer.Option(help="Name of the run.")
+
     sequence_per_individual: int = typer.Option(
         300, help="Number of sequences per individual."
     )
+    sequence_length: int = typer.Option(150, help="Length of each sequence.")
     train_eval_split: float = typer.Option(
         0.1, help="Proportion of dataset for evaluation."
     )
+
     epochs: int = typer.Option(20, help="Number of training epochs.")
+    batch_size: int = typer.Option(256, help="Batch size for training and evaluation.")
     learning_rate: float = typer.Option(5e-5, help="Learning rate for training.")
     model_dim: int = typer.Option(
         128, help="Dimensionality of the model (hidden size)."
+    )
+
+    model_type: str = typer.Option(
+        "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
+    )
+
+    labels_to_remove: Optional[str] = typer.Option(
+        None, help="Labels to remove from metadata seperated by commas."
+    )
+    checkpoint_dir: Optional[Path] = typer.Option(
+        None, help="Path to a checkpoint to resume training from."
+    )
+    individuals_to_ignore: Optional[Path] = typer.Option(
+        None, help="List of individuals to ignore during training."
     )
     tokenizer_path: Optional[Path] = typer.Option(
         None, help="Path to the tokenizer file."
@@ -53,18 +79,97 @@ class Train(ModelCommonArgs):
     )
 
     @field_serializer(
-        "tokenizer_path",
+        "base_dir",
+        "metadata_file",
+        "output_dir",
         "individuals_to_ignore",
+        "checkpoint_dir",
+        "tokenizer_path",
     )
-    def serialize_path_train(self, value: Path) -> str:
+    def serialize_path(self, value: Path) -> str:
         return str(value)
+
+    def build_config_and_model(
+        self, train_ds: DNADataset, tokenizer: PreTrainedTokenizerFast
+    ):
+        common_config_args = {
+            "hidden_size": self.model_dim,
+            "num_attention_heads": 8,
+            "activation_shaping": True,
+            "activation_shaping_pruning_level": self.activation_shaping_pruning_level,
+        }
+
+        if self.model_type == "bert":
+
+            bert_config_args = {
+                "intermediate_size": self.model_dim * 4,
+                "position_embedding_type": "absolute",
+                "hidden_dropout_prob": 0.1,
+                "attention_probs_dropout_prob": 0.1,
+            }
+
+            total_config_args = {**common_config_args, **bert_config_args}
+
+            config = DnaBertConfig.build(
+                ds=train_ds,
+                tokenizer=tokenizer,
+                **total_config_args,
+            )
+            model_class = DnaBertForSequenceClassification
+        else:
+            modern_bert_config_args = {
+                "intermediate_size": int(1.5 * self.model_dim),
+            }
+            total_config_args = {**common_config_args, **modern_bert_config_args}
+
+            config = DnaModernBertConfig.build(
+                ds=train_ds,
+                tokenizer=tokenizer,
+                **total_config_args,
+            )
+
+            model_class = DnaModernBertForSequenceClassification
+
+        model = model_class(config)
+        return config, model
+
+    def load_config_and_model(
+        self, checkpoint_dir: Path, tokenizer: PreTrainedTokenizerFast
+    ):
+        if self.model_type == "bert":
+            config = DnaBertConfig.from_pretrained(checkpoint_dir)
+            model = DnaBertForSequenceClassification.from_pretrained(
+                checkpoint_dir,
+                config=config,
+                ignore_mismatched_sizes=True,
+            )
+        else:
+            config = DnaModernBertConfig.from_pretrained(checkpoint_dir)
+            model = DnaModernBertForSequenceClassification.from_pretrained(
+                checkpoint_dir,
+                config=config,
+                ignore_mismatched_sizes=True,
+            )
+        return config, model
+
+    def get_config_and_model(
+        self, train_ds: DNADataset, tokenizer: PreTrainedTokenizerFast
+    ):
+        if self.checkpoint_dir:
+            logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
+            return self.load_config_and_model(self.checkpoint_dir, tokenizer)
+        else:
+            logger.info(
+                "No checkpoint provided, creating a new model and training from scratch."
+            )
+            return self.build_config_and_model(train_ds, tokenizer)
 
     def model_post_init(self, _):
         try:
             output_dir = Path(self.output_dir) / self.run_name
             # assert not output_dir.exists(), f"Output directory {output_dir} already exists."
             output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / "config.json", "w") as f:
+            with open(output_dir / "args_config.json", "w") as f:
                 json.dump(self.model_dump(), f, indent=4)
 
             tokenizer = get_tokenizer(self.tokenizer_path)
@@ -80,53 +185,11 @@ class Train(ModelCommonArgs):
                 data_ratio_to_use=1,
                 mode=DatasetMode.RANDOM_FIXED_LEN,
                 labels_to_remove=self.labels_to_remove,
-                individual_to_ignore=self.individuals_to_ignore,
+                individuals_to_ignore=self.individuals_to_ignore,
             )
 
-            common_config_args = {
-                "vocab_size": tokenizer.vocab_size,
-                "hidden_size": self.model_dim,
-                "num_attention_heads": 8,
-                "num_labels": len(train_ds.label_to_id),
-                "class_weights": train_ds.class_weights.tolist(),
-                "activation_shaping": True,
-                "activation_shaping_pruning_level": self.activation_shaping_pruning_level,
-                "max_position": train_ds.max_position,
-                "snp_count": train_ds.snp_count,
-            }
-
-            if self.model_type == "bert":
-                config = DnaBertConfig(
-                    **common_config_args,
-                    intermediate_size=self.model_dim * 4,
-                    position_embedding_type="absolute",
-                    hidden_dropout_prob=0,
-                    attention_probs_dropout_prob=0,
-                )
-                model_class = DnaBertForSequenceClassification
-            else:
-                config = DnaModernBertConfig(
-                    **common_config_args,
-                    intermediate_size=int(1.5 * self.model_dim),
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-
-                model_class = DnaModernBertForSequenceClassification
-
-            if self.checkpoint_dir is None:
-                logger.info(
-                    "No checkpoint provided, creating a new model and training from scratch."
-                )
-                model = model_class(config)
-            else:
-                logger.info(
-                    f"Loading checkpoint from {self.checkpoint_dir} and resuming training."
-                )
-                model = model_class.from_pretrained(
-                    self.checkpoint_dir,
-                    config=config,
-                    ignore_mismatched_sizes=True,
-                )
+            config, model = self.get_config_and_model(train_ds, tokenizer)
+            config.save_pretrained(output_dir)
 
             training_args = TrainingArguments(
                 output_dir=output_dir / "checkpoints",
@@ -149,16 +212,7 @@ class Train(ModelCommonArgs):
                 report_to=["tensorboard"],
             )
 
-            accuracy_metric = evaluate.load("accuracy")
-
-            def compute_metrics(eval_pred):
-                logits, labels = eval_pred
-                if isinstance(logits, np.ndarray):
-                    logits = torch.from_numpy(logits)
-                predictions = torch.argmax(logits, dim=-1)
-                return accuracy_metric.compute(
-                    predictions=predictions, references=labels
-                )
+            metrics_calculator = MetricCalculator(metadata=train_ds.metadata)
 
             trainer = Trainer(
                 model=model,
@@ -166,7 +220,7 @@ class Train(ModelCommonArgs):
                 data_collator=get_data_collator(tokenizer),
                 train_dataset=train_ds,
                 eval_dataset=eval_ds,
-                compute_metrics=compute_metrics,
+                compute_metrics=metrics_calculator.compute_metrics,
             )
 
             trainer.train()
