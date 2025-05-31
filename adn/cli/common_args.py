@@ -1,7 +1,16 @@
+import json
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel, field_serializer
 import typer
+
+from transformers import PreTrainedTokenizerFast
+
+from adn.models.transformers.bert import DnaBertConfig, DnaBertForSequenceClassification
+from adn.models.transformers.modern_bert import (
+    DnaModernBertConfig,
+    DnaModernBertForSequenceClassification,
+)
 
 
 class ModelCommonArgs(BaseModel):
@@ -20,11 +29,11 @@ class ModelCommonArgs(BaseModel):
     checkpoint_dir: Optional[Path] = typer.Option(
         None, help="Path to a checkpoint to resume training from."
     )
-    individuals_to_ignore: Optional[Path] = typer.Option(
+    individuals_to_ignore: Optional[str] = typer.Option(
         None, help="List of individuals to ignore during training."
     )
-    model_type: str = typer.Option(
-        "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
+    overlaping_ratio: float = typer.Option(
+        0.5, help="Overlapping ratio for sequences (0.0 to 1.0)."
     )
 
     @field_serializer(
@@ -35,3 +44,30 @@ class ModelCommonArgs(BaseModel):
     )
     def serialize_path(self, value: Path) -> str:
         return str(value)
+
+    def load_config_and_model(self):
+        config_json_path = self.checkpoint_dir / "config.json"
+        with open(config_json_path, "r") as f:
+            config_json = json.load(f)
+
+        model_type_to_class = {
+            "bert": (DnaBertConfig, DnaBertForSequenceClassification),
+            "modernbert": (
+                DnaModernBertConfig,
+                DnaModernBertForSequenceClassification,
+            ),
+        }
+
+        model_type = config_json["model_type"]
+        config_class, model_class = model_type_to_class[model_type]
+        config = config_class.from_pretrained(
+            self.checkpoint_dir,
+        )
+
+        model = model_class.from_pretrained(
+            self.checkpoint_dir,
+            config=config,
+            ignore_mismatched_sizes=True,
+        )
+
+        return config, model

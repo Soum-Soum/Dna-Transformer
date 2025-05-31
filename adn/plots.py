@@ -6,60 +6,6 @@ import pandas as pd
 from sklearn.manifold import TSNE
 
 
-def plot_trainer_logs(log_history, output_dir: Path):
-    epochs = []
-    train_losses = []
-    eval_losses = []
-    eval_accuracies = []
-    learning_rates = []
-
-    for entry in log_history:
-        if "loss" in entry and "epoch" in entry:
-            epochs.append(entry["epoch"])
-            train_losses.append(entry["loss"])
-            learning_rates.append(entry.get("learning_rate"))
-
-        if "eval_loss" in entry:
-            eval_losses.append((entry["epoch"], entry["eval_loss"]))
-
-        if "eval_accuracy" in entry:
-            eval_accuracies.append((entry["epoch"], entry["eval_accuracy"]))
-
-    eval_epochs, eval_losses = zip(*eval_losses)
-    acc_epochs, eval_accuracies = zip(*eval_accuracies)
-
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-
-    axes[0, 0].plot(epochs, train_losses, label="Training Loss")
-    axes[0, 0].set_title("Training Loss")
-    axes[0, 0].set_xlabel("Epoch")
-    axes[0, 0].set_ylabel("Loss")
-
-    axes[0, 1].plot(eval_epochs, eval_losses, label="Evaluation Loss", color="orange")
-    axes[0, 1].set_title("Evaluation Loss")
-    axes[0, 1].set_xlabel("Epoch")
-    axes[0, 1].set_ylabel("Loss")
-
-    axes[1, 0].plot(
-        acc_epochs, eval_accuracies, label="Evaluation Accuracy", color="green"
-    )
-    axes[1, 0].set_title("Evaluation Accuracy")
-    axes[1, 0].set_xlabel("Epoch")
-    axes[1, 0].set_ylabel("Accuracy")
-
-    axes[1, 1].plot(epochs, learning_rates, label="Learning Rate", color="red")
-    axes[1, 1].set_title("Learning Rate")
-    axes[1, 1].set_xlabel("Epoch")
-    axes[1, 1].set_ylabel("Learning Rate")
-
-    for ax in axes.flatten():
-        ax.grid(True)
-        ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "training_metrics.png")
-
-
 def plot_tsne(
     res_df: pd.DataFrame,
     centroids: dict[str, np.ndarray] = {},

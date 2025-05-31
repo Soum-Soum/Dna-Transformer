@@ -43,7 +43,7 @@ class Predictor:
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=partial(collate_fn, data_collator=self.data_collator),
-            # num_workers=1,
+            num_workers=4,
         )
 
     def _results_to_df(self, results: list, ds: DNADataset) -> pd.DataFrame:
@@ -58,17 +58,33 @@ class Predictor:
                 "label",
             ],
         )
-        df["label_decoded"] = df["label"].apply(lambda x: ds.id_to_label[x])
+        df.to_parquet("lol.parquet", index=False)
+
+        # labels
+        df["label_id"] = df["label"].apply(lambda x: x[0])
+        df["family_id"] = df["label"].apply(lambda x: x[1])
+
+        df["label_decoded"] = df["label_id"].apply(lambda x: ds.metadata.id_to_label[x])
+        df["family_decoded"] = df["family_id"].apply(
+            lambda x: ds.metadata.id_to_family[x]
+        )
+
+        # logits
+        df["pred"] = df["logits"].apply(lambda x: np.argmax(x))
+        df["pred_prob"] = df.apply(lambda x: x["logits"][x["pred"]], axis=1)
+        df["is_error"] = (df["pred"] != df["label_id"]).astype(int)
+        df["pred_decoded"] = df["pred"].apply(lambda x: ds.metadata.id_to_label[x])
+
+        df = df.drop(columns=["label"])
+
+        # intervals
         df["start_position"] = df["interval"].apply(lambda x: int(x[0]))
         df["end_position"] = df["interval"].apply(lambda x: int(x[1]))
         df["interval_length"] = df["end_position"] - df["start_position"]
         df = df.drop(columns=["interval"])
 
-        df = df.set_index("individual").join(ds.metadata_df["GroupK9"]).reset_index()
+        df = df.set_index("individual").reset_index()
 
-        df["pred"] = df["logits"].apply(lambda x: np.argmax(x))
-        df["pred_prob"] = df.apply(lambda x: x["logits"][x["pred"]], axis=1)
-        df["is_error"] = (df["pred"] != df["label"]).astype(int)
         df["error"] = df.apply(lambda x: min(x["is_error"], 1 - x["pred_prob"]), axis=1)
         return df
 
@@ -89,7 +105,7 @@ class Predictor:
         )
 
     def _process_one_batch(
-        self, batch: dict[str, torch.Tensor], metadata: dict
+        self, batch: dict[str, torch.Tensor], batch_metadata: dict
     ) -> list:
         batch = {k: v.cuda() for k, v in batch.items()}
 
@@ -112,8 +128,8 @@ class Predictor:
                 logits,
                 ennergy_scores,
                 embeddings,
-                metadata["individual"],
-                metadata["interval"],
+                batch_metadata["individual"],
+                batch_metadata["interval"],
                 batch["labels"].cpu().detach().numpy(),
             )
         )
@@ -121,7 +137,7 @@ class Predictor:
         return results
 
     def _save_metadata(self, dataset: DNADataset) -> None:
-        metadata_df = dataset.metadata_df.copy()
+        metadata_df = dataset.metadata.metadata_df.copy()
         metadata_df.to_csv(self.output_dir / "metadata.csv")
         logger.info(f"Saved metadata to {self.output_dir / 'metadata.csv'}")
 
@@ -132,13 +148,13 @@ class Predictor:
         individual_to_results = defaultdict(list)
 
         with torch.no_grad():
-            for batch, metadata in tqdm(
+            for batch, batch_metadata in tqdm(
                 dataloader, desc="Predicting...", unit="batch", total=len(dataloader)
             ):
 
-                current_batch_results = self._process_one_batch(batch, metadata)
+                current_batch_results = self._process_one_batch(batch, batch_metadata)
 
-                unique_individuals = np.unique(metadata["individual"])
+                unique_individuals = np.unique(batch_metadata["individual"])
 
                 for individual in unique_individuals:
                     individual_to_results[individual] += list(

@@ -222,15 +222,15 @@ class DnaBertForSequenceClassification(BertForSequenceClassification):
         self, outputs: BaseModelOutputWithPoolingAndCrossAttentions, labels=None
     ) -> SequenceClassifierOutput:
         pooled_output = outputs.pooler_output
-        logits = self.classifier(self.dropout(pooled_output))
+        label_logits = self.classifier(self.dropout(pooled_output))
+        family_logits = self.family_classifier(outputs.pooler_output)
 
         if labels is not None:
-            family_logits = self.family_classifier(outputs.pooler_output)
 
             labels_ids, family_ids = torch.split(labels, 1, dim=1)
 
             loss = self.logits_loss_fct(
-                logits.view(-1, self.num_labels), labels_ids.view(-1)
+                label_logits.view(-1, self.num_labels), labels_ids.view(-1)
             ) + self.family_loss_fct(
                 family_logits.view(-1, self.num_labels), family_ids.view(-1)
             )
@@ -239,7 +239,7 @@ class DnaBertForSequenceClassification(BertForSequenceClassification):
 
         return SequenceClassifierOutput(
             loss=loss,
-            logits=logits,
+            logits=label_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )

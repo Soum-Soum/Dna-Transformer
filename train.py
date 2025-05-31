@@ -1,13 +1,10 @@
 import json
-import math
 from pathlib import Path
 import traceback
 from typing import Optional
 from loguru import logger
 import typer
-from pydantic import BaseModel, field_serializer
-import torch
-import numpy as np
+from pydantic import field_serializer
 from adn.data.data import DatasetMode, load_datasets
 from adn.data.data_collator import get_data_collator
 from adn.data.datasets.base import DNADataset
@@ -20,55 +17,33 @@ from adn.models.transformers.modern_bert import (
     DnaModernBertForSequenceClassification,
 )
 from transformers import Trainer, TrainingArguments, PreTrainedTokenizerFast
-import evaluate
 
 from adn.utils.paths_utils import PathHelper
+from adn.cli.common_args import ModelCommonArgs
 
 app = typer.Typer()
 
 
 @app.command()
-class Train(BaseModel):
+class Train(ModelCommonArgs):
     """
     Launch a training run for the model.
     """
 
-    base_dir: Path = typer.Option(help="Base data directory containing the dataset.")
-    metadata_file: Optional[Path] = typer.Option(
-        None, help="Path to the metadata file to use (will override the default one)."
-    )
-    output_dir: Path = typer.Option(
-        Path("output"), help="Directory to save model checkpoints."
-    )
     run_name: str = typer.Option(help="Name of the run.")
-
     sequence_per_individual: int = typer.Option(
         300, help="Number of sequences per individual."
     )
-    sequence_length: int = typer.Option(150, help="Length of each sequence.")
     train_eval_split: float = typer.Option(
         0.1, help="Proportion of dataset for evaluation."
     )
-
     epochs: int = typer.Option(20, help="Number of training epochs.")
-    batch_size: int = typer.Option(256, help="Batch size for training and evaluation.")
     learning_rate: float = typer.Option(5e-5, help="Learning rate for training.")
     model_dim: int = typer.Option(
         128, help="Dimensionality of the model (hidden size)."
     )
-
     model_type: str = typer.Option(
         "modern_bert", help="Type de modèle à utiliser ('bert' ou 'modern_bert')."
-    )
-
-    labels_to_remove: Optional[str] = typer.Option(
-        None, help="Labels to remove from metadata seperated by commas."
-    )
-    checkpoint_dir: Optional[Path] = typer.Option(
-        None, help="Path to a checkpoint to resume training from."
-    )
-    individuals_to_ignore: Optional[Path] = typer.Option(
-        None, help="List of individuals to ignore during training."
     )
     tokenizer_path: Optional[Path] = typer.Option(
         None, help="Path to the tokenizer file."
@@ -79,11 +54,6 @@ class Train(BaseModel):
     )
 
     @field_serializer(
-        "base_dir",
-        "metadata_file",
-        "output_dir",
-        "individuals_to_ignore",
-        "checkpoint_dir",
         "tokenizer_path",
     )
     def serialize_path(self, value: Path) -> str:
@@ -133,31 +103,12 @@ class Train(BaseModel):
         model = model_class(config)
         return config, model
 
-    def load_config_and_model(
-        self, checkpoint_dir: Path, tokenizer: PreTrainedTokenizerFast
-    ):
-        if self.model_type == "bert":
-            config = DnaBertConfig.from_pretrained(checkpoint_dir)
-            model = DnaBertForSequenceClassification.from_pretrained(
-                checkpoint_dir,
-                config=config,
-                ignore_mismatched_sizes=True,
-            )
-        else:
-            config = DnaModernBertConfig.from_pretrained(checkpoint_dir)
-            model = DnaModernBertForSequenceClassification.from_pretrained(
-                checkpoint_dir,
-                config=config,
-                ignore_mismatched_sizes=True,
-            )
-        return config, model
-
     def get_config_and_model(
         self, train_ds: DNADataset, tokenizer: PreTrainedTokenizerFast
     ):
         if self.checkpoint_dir:
             logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
-            return self.load_config_and_model(self.checkpoint_dir, tokenizer)
+            return self.load_config_and_model()
         else:
             logger.info(
                 "No checkpoint provided, creating a new model and training from scratch."
@@ -194,7 +145,9 @@ class Train(BaseModel):
             training_args = TrainingArguments(
                 output_dir=output_dir / "checkpoints",
                 eval_strategy="epoch",
-                save_strategy="epoch",
+                save_strategy="best",
+                metric_for_best_model="final_accuracy",
+                save_total_limit=1,
                 logging_strategy="steps",
                 logging_dir=str(output_dir / "logs"),
                 logging_steps=250,
@@ -224,8 +177,6 @@ class Train(BaseModel):
             )
 
             trainer.train()
-
-            plot_trainer_logs(trainer.state.log_history, output_dir)
 
         except Exception as e:
             logger.error(

@@ -18,16 +18,12 @@ class SequentialFixedLenDNADataset(DNADataset):
         self,
         metadata: Metadata,
         path_helper: PathHelper,
-        label_to_id: dict[str, int],
-        label_to_family: dict[str, str],
         sequence_length: int,
         overlaping_ratio: float,
     ):
         super().__init__(
             metadata=metadata,
             path_helper=path_helper,
-            label_to_id=label_to_id,
-            label_to_family=label_to_family,
             sequence_length=sequence_length,
         )
         self.overlaping_ratio = overlaping_ratio
@@ -43,7 +39,7 @@ class SequentialFixedLenDNADataset(DNADataset):
 
     def _load_pairs(self) -> pl.DataFrame:
         logger.info(f"Loading pairs from file {self.cache_save_path}")
-        pairs_df = pl.read_parquet(self.cache_save_path)
+        pairs_df = pl.from_pandas(pd.read_parquet(self.cache_save_path))
         logger.info(f"Loaded pairs from {self.cache_save_path}")
         return pairs_df
 
@@ -153,7 +149,7 @@ class SequentialFixedLenDNADataset(DNADataset):
 
     def get_label(self, individual: str) -> int:
         if individual == REFERENCE_STR:
-            return 0
+            return 0, 0  # Reference genome has no label
         return super().get_label(individual)
 
     def __hash__(self):
@@ -165,15 +161,7 @@ class SequentialFixedLenDNADataset(DNADataset):
     def __len__(self) -> int:
         return len(self._individual_pos_pairs)
 
-    def _update_current_individual(self, individual: str):
-        if self._current_individual != individual:
-            logger.info(
-                f"Updating current individual from {self._current_individual} to {individual}"
-            )
-            self._current_individual = individual
-
     def __getitem__(self, idx):
-        individual, snp_idx = self._individual_pos_pairs[idx]
-        self._update_current_individual(individual)
+        individual, snp_idx = self._individual_pos_pairs[idx].rows()[0]
         sub_ref_updated = self._extract_individual_subsequence(individual, snp_idx)
         return self._subsequence_to_dict(sub_ref_updated, individual)

@@ -1,7 +1,11 @@
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
+import pickle
+import hashlib
+import json
 
+from loguru import logger
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -41,17 +45,70 @@ def process_file_errors(parquet_file_path: Path, distances: pd.Series) -> pd.Dat
 
 class OnDiskPredictionResults:
 
-    def __init__(self, parquet_dir: Path, workers: int = 4):
+    def __init__(self, base_dir: Path, workers: int = 4):
+        self.base_dir = base_dir
         self.workers = workers
-        self.parquet_files_paths = list(parquet_dir.glob("*.parquet"))
+        self.parquet_files_paths = list(base_dir.glob("*.parquet"))
         self.npy_files_paths = list(
             map(lambda x: x.with_suffix(".npy"), self.parquet_files_paths)
         )
-        self.metadata = pd.read_csv(str(parquet_dir / "metadata.csv"), index_col=0)
+        self.npy_without_reference = list(
+            filter(lambda x: not x.stem.endswith("reference"), self.npy_files_paths)
+        )
+        self.metadata = pd.read_csv(str(base_dir / "metadata.csv"), index_col=0)
         self.individual_to_label = self.metadata["label"].to_dict()
         self.embeddings_dim = np.load(self.npy_files_paths[0]).shape[1]
 
+        # Create cache directory
+        self.cache_dir = base_dir / ".cache"
+        self.cache_dir.mkdir(exist_ok=True)
+
+        # Generate a hash for the current state to detect changes
+        self._cache_key = self._generate_cache_key()
+
+    def _generate_cache_key(self) -> str:
+        """Generate a unique cache key based on file modifications and metadata."""
+        # Collect file modification times
+        file_info = {}
+        for file_path in self.npy_files_paths + self.parquet_files_paths:
+            if file_path.exists():
+                file_info[str(file_path)] = file_path.stat().st_mtime
+
+        # Add metadata info
+        metadata_path = self.base_dir / "metadata.csv"
+        if metadata_path.exists():
+            file_info[str(metadata_path)] = metadata_path.stat().st_mtime
+
+        # Create hash
+        hash_input = json.dumps(file_info, sort_keys=True).encode()
+        return hashlib.md5(hash_input).hexdigest()
+
+    def _get_cache_path(self, cache_name: str) -> Path:
+        """Get the cache file path for a given cache name."""
+        return self.cache_dir / f"{cache_name}_{self._cache_key}.pkl"
+
+    def _load_from_cache(self, cache_name: str):
+        """Load data from cache if it exists."""
+        cache_path = self._get_cache_path(cache_name)
+        if cache_path.exists():
+            logger.info(f"Loading {cache_name} from cache: {cache_path}")
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+        return None
+
+    def _save_to_cache(self, cache_name: str, data):
+        """Save data to cache."""
+        cache_path = self._get_cache_path(cache_name)
+        with open(cache_path, "wb") as f:
+            pickle.dump(data, f)
+
     def compute_centroids(self) -> dict[str, np.ndarray]:
+        # Try to load from cache first
+        cached_centroids = self._load_from_cache("centroids")
+        if cached_centroids is not None:
+            return cached_centroids
+
+        logger.info("Computing centroids...")
         lables_set = set(self.metadata["label"].unique())
         centroids = {label: np.zeros(self.embeddings_dim) for label in lables_set}
         counts = {label: 0 for label in lables_set}
@@ -64,17 +121,33 @@ class OnDiskPredictionResults:
             )
 
             for result in tqdm(
-                executor.map(partial_process_file_centroids, self.npy_files_paths),
-                total=len(self.npy_files_paths),
+                executor.map(
+                    partial_process_file_centroids, self.npy_without_reference
+                ),
+                total=len(self.npy_without_reference),
                 desc="Computing centroids",
                 unit="file",
             ):
                 embedding_sum, count, label = result
                 centroids[label] += embedding_sum
                 counts[label] += count
-        return {label: centroids[label] / counts[label] for label in centroids}
+
+        final_centroids = {
+            label: centroids[label] / counts[label] for label in centroids
+        }
+
+        # Save to cache
+        self._save_to_cache("centroids", final_centroids)
+
+        return final_centroids
 
     def compute_distances(self) -> pd.DataFrame:
+        # Try to load from cache first
+        cached_distances = self._load_from_cache("distances")
+        if cached_distances is not None:
+            return cached_distances
+
+        logger.info("Computing distances...")
         centroids = self.compute_centroids()
 
         with ProcessPoolExecutor(max_workers=self.workers) as executor:
@@ -103,10 +176,19 @@ class OnDiskPredictionResults:
             "euclidean_distance_" + str(col)
             for col in pivot_df.columns.get_level_values(1)
         ]
+
+        # Save to cache
+        self._save_to_cache("distances", pivot_df)
+
         return pivot_df
 
-    def compute_error(self) -> pd.DataFrame:
+    def compute_errors(self) -> pd.DataFrame:
+        # Try to load from cache first
+        cached_errors = self._load_from_cache("errors")
+        if cached_errors is not None:
+            return cached_errors
 
+        logger.info("Computing errors...")
         distances_df = self.compute_distances()
 
         with ProcessPoolExecutor(max_workers=1) as executor:
@@ -130,4 +212,15 @@ class OnDiskPredictionResults:
 
         errors_df = pd.concat(all_errors, ignore_index=True)
 
+        # Save to cache
+        self._save_to_cache("errors", errors_df)
+
         return errors_df
+
+    def plot_tsne(self, sample_per_individual: int = 100):
+        
+        tsne_data = []
+        pass
+    
+        
+        

@@ -1,4 +1,6 @@
+from pathlib import Path
 import traceback
+from typing import Optional
 from loguru import logger
 from tqdm import TqdmExperimentalWarning, tqdm
 from transformers import PreTrainedTokenizerFast
@@ -21,24 +23,15 @@ class Predict(ModelCommonArgs):
     Predict using a trained model.
     """
 
-    overlaping_ratio: float = typer.Option(
-        0.5,
-        help="Overlapping ratio for sequences (0.0 to 1.0).",
-    )
-
     def model_post_init(self, _):
         try:
-            if self.model_type == "bert":
-                model_class = DnaBertForSequenceClassification
-            else:
-                model_class = DnaModernBertForSequenceClassification
-            model = model_class.from_pretrained(
-                self.checkpoint_dir,
-            )
+            
 
             tokenizer = PreTrainedTokenizerFast.from_pretrained(
                 str(self.checkpoint_dir.parent.parent),
             )
+
+            config, model = self.load_config_and_model()
 
             data_collator = get_data_collator(
                 tokenizer=tokenizer,
