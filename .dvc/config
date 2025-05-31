@@ -1,0 +1,6 @@
+[core]
+    remote = ovhremote
+    autostage = true
+['remote "ovhremote"']
+    url = s3://pcmdata/dna/rice
+    endpointurl = https://s3.gra.io.cloud.ovh.net
