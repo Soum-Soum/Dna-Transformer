@@ -13,7 +13,7 @@ from adn.models.transformers.modern_bert import (
 )
 
 
-class ModelCommonArgs(BaseModel):
+class CommonArgs(BaseModel):
     base_dir: Path = typer.Option(help="Base data directory containing the dataset.")
     metadata_file: Optional[Path] = typer.Option(
         None, help="Path to the metadata file to use (will override the default one)."
@@ -45,7 +45,7 @@ class ModelCommonArgs(BaseModel):
     def serialize_path(self, value: Path) -> str:
         return str(value)
 
-    def load_config_and_model(self):
+    def load_config_and_model(self, **config_kwarks: dict) -> tuple:
         config_json_path = self.checkpoint_dir / "config.json"
         with open(config_json_path, "r") as f:
             config_json = json.load(f)
@@ -62,6 +62,7 @@ class ModelCommonArgs(BaseModel):
         config_class, model_class = model_type_to_class[model_type]
         config = config_class.from_pretrained(
             self.checkpoint_dir,
+            **config_kwarks,
         )
 
         model = model_class.from_pretrained(

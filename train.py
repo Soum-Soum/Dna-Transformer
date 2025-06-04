@@ -10,7 +10,6 @@ from adn.data.data_collator import get_data_collator
 from adn.data.datasets.base import DNADataset
 from adn.eval.metrics import MetricCalculator
 from adn.models.tokenizer import get_tokenizer
-from adn.plots import plot_trainer_logs
 from adn.models.transformers.bert import DnaBertConfig, DnaBertForSequenceClassification
 from adn.models.transformers.modern_bert import (
     DnaModernBertConfig,
@@ -19,13 +18,13 @@ from adn.models.transformers.modern_bert import (
 from transformers import Trainer, TrainingArguments, PreTrainedTokenizerFast
 
 from adn.utils.paths_utils import PathHelper
-from adn.cli.common_args import ModelCommonArgs
+from adn.cli.common_args import CommonArgs
 
 app = typer.Typer()
 
 
 @app.command()
-class Train(ModelCommonArgs):
+class Train(CommonArgs):
     """
     Launch a training run for the model.
     """
@@ -108,7 +107,11 @@ class Train(ModelCommonArgs):
     ):
         if self.checkpoint_dir:
             logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
-            return self.load_config_and_model()
+            return self.load_config_and_model(
+                config_kwarks={
+                    "activation_shaping_pruning_level": self.activation_shaping_pruning_level,
+                }
+            )
         else:
             logger.info(
                 "No checkpoint provided, creating a new model and training from scratch."

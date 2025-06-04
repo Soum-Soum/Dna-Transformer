@@ -12,20 +12,19 @@ from adn.models.transformers.bert import DnaBertForSequenceClassification
 from adn.models.transformers.modern_bert import DnaModernBertForSequenceClassification
 from adn.prediction import Predictor
 from adn.utils.paths_utils import PathHelper
-from adn.cli.common_args import ModelCommonArgs
+from adn.cli.common_args import CommonArgs
 
 app = typer.Typer()
 
 
 @app.command()
-class Predict(ModelCommonArgs):
+class Predict(CommonArgs):
     """
     Predict using a trained model.
     """
 
     def model_post_init(self, _):
         try:
-            
 
             tokenizer = PreTrainedTokenizerFast.from_pretrained(
                 str(self.checkpoint_dir.parent.parent),
