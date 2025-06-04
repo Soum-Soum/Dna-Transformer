@@ -3,7 +3,10 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import polars as pl
 from sklearn.manifold import TSNE
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 
 
 def plot_tsne(
@@ -14,16 +17,15 @@ def plot_tsne(
     n_iter=300,
     random_state=42,
 ):
-    required_columns = {"embeddings", "label_decoded", "GroupK9", "start_position"}
+    required_columns = {"embedding", "label_decoded", "start_position"}
     missing_columns = required_columns - set(res_df.columns)
 
     if missing_columns:
         raise ValueError(f"Missing required columns in dataframe: {missing_columns}")
 
     # Extract data
-    embeddings = np.stack(res_df["embeddings"].values)
+    embeddings = np.stack(res_df["embedding"].values)
     labels, label_classes = pd.factorize(res_df["label_decoded"])
-    group_k9, group_k9_classes = pd.factorize(res_df["GroupK9"])
     positions = res_df["start_position"].values  # Numeric positions
 
     assert (
@@ -52,11 +54,10 @@ def plot_tsne(
     else:
         centroids_tsne = None
 
-    fig, axes = plt.subplots(1, 3, figsize=(20, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(25, 10))
 
     plots_info = [
         ("Labels", labels, label_classes, "Accent"),
-        ("Group K9", group_k9, group_k9_classes, "Set1"),
         ("Position", positions, None, "plasma"),
     ]
 
@@ -131,3 +132,87 @@ def plot_tsne(
         plt.show()
 
     plt.close()
+
+
+def plot_confusion_matrix(
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    normalize: str = None,
+    output_dir: Path = None,
+    title: str = "Confusion Matrix",
+    figsize: tuple = (12, 10),
+):
+    """
+    Plot confusion matrix for predictions.
+
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        normalize: {'true', 'pred', 'all', None} - Normalize confusion matrix
+        output_dir: Optional directory to save the plot
+        title: Title for the plot
+        figsize: Figure size (width, height)
+    """
+    # Calculate confusion matrix
+    cm = confusion_matrix(y_true, y_pred, normalize=normalize)
+    labels = sorted(y_true.unique())
+
+    # Create plot
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt=".3f" if normalize else "d",
+        cmap="Blues",
+        xticklabels=labels,
+        yticklabels=labels,
+        cbar_kws={"label": "Proportion" if normalize else "Count"},
+    )
+
+    plt.title(f"{title}{' (Normalized)' if normalize else ''}")
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+
+    # Save or display the plot
+    if output_dir:
+        output_path = Path(output_dir) / "confusion_matrix.png"
+        try:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            print(f"Confusion matrix saved to {output_path}")
+        except Exception as e:
+            print(f"Failed to save plot: {e}")
+    else:
+        plt.show()
+
+    plt.close()
+
+
+def plot_2d_hist(df: pl.DataFrame):
+    df = df[["label_distance", "pred_label_distance"]].to_pandas()
+
+    # Binning 2D des données
+    heatmap, xedges, yedges = np.histogram2d(
+        df["label_distance"], df["pred_label_distance"], bins=100
+    )
+
+    # Logarithme + lissage (interpolation type KDE)
+    log_heatmap = np.log1p(heatmap)
+
+    # Affichage
+    plt.figure(figsize=(8, 6))
+    plt.imshow(
+        log_heatmap.T,
+        origin="lower",
+        aspect="auto",
+        cmap="viridis",
+        extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+    )
+    plt.colorbar(label="log(1 + density)")
+    plt.xlabel("Label distance")
+    plt.ylabel("Predicted label distance")
+    plt.title("Heatmap densité of label vs predicted label distance")
+    plt.grid(False)
+    plt.show()
