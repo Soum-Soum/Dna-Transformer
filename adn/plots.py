@@ -33,9 +33,9 @@ def plot_tsne(
     ), f"Expected embeddings to be a 2D array, got shape {embeddings.shape}"
 
     if len(centroids) != 0:
-        assert len(centroids) == len(
-            label_classes
-        ), f"Centroids length {len(centroids)} does not match label classes length {len(label_classes)}"
+        # assert len(centroids) == len(
+        #     label_classes
+        # ), f"Centroids length {len(centroids)} does not match label classes length {len(label_classes)}"
         embeddings = np.concatenate([embeddings, np.stack(list(centroids.values()))])
 
     tsne = TSNE(
@@ -44,6 +44,7 @@ def plot_tsne(
         n_iter=n_iter,
         random_state=random_state,
         verbose=1,
+        n_jobs=-1,
     )
     tsne_results = tsne.fit_transform(embeddings)
     if len(centroids) != 0:
@@ -190,29 +191,58 @@ def plot_confusion_matrix(
     plt.close()
 
 
-def plot_2d_hist(df: pl.DataFrame):
-    df = df[["label_distance", "pred_label_distance"]].to_pandas()
+def plot_2d_histogram(df: pl.DataFrame):
+    # Récupère les bonnes colonnes
+    df_pd = df[["label_distance", "pred_label_distance", "ennergy_scores"]].to_pandas()
+    x = df_pd["label_distance"]
+    y = df_pd["pred_label_distance"]
+    e = df_pd["ennergy_scores"]
 
-    # Binning 2D des données
-    heatmap, xedges, yedges = np.histogram2d(
-        df["label_distance"], df["pred_label_distance"], bins=100
-    )
+    # Définir les bins
+    bins = 100
+    x_bins = np.linspace(x.min(), x.max(), bins + 1)
+    y_bins = np.linspace(y.min(), y.max(), bins + 1)
 
-    # Logarithme + lissage (interpolation type KDE)
+    # Histogramme 2D classique
+    heatmap, xedges, yedges = np.histogram2d(x, y, bins=[x_bins, y_bins])
     log_heatmap = np.log1p(heatmap)
 
-    # Affichage
-    plt.figure(figsize=(8, 6))
-    plt.imshow(
+    # Histogramme 2D pondéré (moyenne de l'énergie)
+    # Pour chaque bin, somme des energy et nombre de points
+    energy_sum, _, _ = np.histogram2d(x, y, bins=[x_bins, y_bins], weights=e)
+    counts, _, _ = np.histogram2d(x, y, bins=[x_bins, y_bins])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        energy_mean = np.divide(energy_sum, counts)
+        energy_mean[counts == 0] = np.nan  # Met des NaN où il n'y a pas de points
+
+    # Subplots
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # 1er subplot: Heatmap des counts
+    im1 = axes[0].imshow(
         log_heatmap.T,
         origin="lower",
         aspect="auto",
         cmap="viridis",
         extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
     )
-    plt.colorbar(label="log(1 + density)")
-    plt.xlabel("Label distance")
-    plt.ylabel("Predicted label distance")
-    plt.title("Heatmap densité of label vs predicted label distance")
-    plt.grid(False)
+    fig.colorbar(im1, ax=axes[0], label="log(1 + densité)")
+    axes[0].set_xlabel("Label distance")
+    axes[0].set_ylabel("Predicted label distance")
+    axes[0].set_title("Heatmap densité")
+
+    # 2ème subplot: Heatmap moyenne énergie
+    im2 = axes[1].imshow(
+        energy_mean.T,
+        origin="lower",
+        aspect="auto",
+        cmap="plasma",
+        extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+    )
+    fig.colorbar(im2, ax=axes[1], label="Mean energy_score")
+    axes[1].set_xlabel("Label distance")
+    axes[1].set_ylabel("Predicted label distance")
+    axes[1].set_title("Moyenne energy_score par bin")
+
+    plt.tight_layout()
     plt.show()

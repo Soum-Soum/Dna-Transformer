@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -80,12 +81,12 @@ def load_individuals_to_ignore(individuals_to_ignore: str) -> set[str]:
 
 
 def build_metadata(
-    path_helper: PathHelper,
-    labels_to_remove: Optional[str],
-    data_ratio_to_use: float,
-    individuals_to_ignore: Optional[str],
+    metadata_file_path: Path,
+    labels_to_remove: Optional[str] = None,
+    data_ratio_to_use: float = 1.0,
+    individuals_to_ignore: Optional[str] = None,
 ) -> Metadata:
-    metadata = pd.read_csv(path_helper.metadata_file_path)
+    metadata = pd.read_csv(metadata_file_path)
     logger.info(f"Loaded metadata with {len(metadata)} individuals")
 
     if labels_to_remove:

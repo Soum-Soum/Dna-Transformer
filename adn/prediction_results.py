@@ -12,7 +12,9 @@ import pandas as pd
 import polars as pl
 from tqdm import tqdm
 
-from adn.plots import plot_2d_hist, plot_confusion_matrix, plot_tsne
+from adn.plots import plot_2d_histogram, plot_confusion_matrix, plot_tsne
+from adn.data.metadata import Metadata, build_metadata
+from adn.utils.paths_utils import PathHelper
 
 
 def process_file_centroids(
@@ -69,43 +71,13 @@ def load_prediction_with_embeddings(
     return df
 
 
-def add_distances_to_errors(errors_df: pl.DataFrame) -> pl.DataFrame:
-    distance_columns = [
-        col for col in errors_df.columns if col.startswith("euclidean_distance_")
-    ]
-
-    def add_distance(df: pl.DataFrame, decode_col: str, out_col: str) -> pl.DataFrame:
-        distances = (
-            df.unpivot(
-                index=["individual", "start_position", decode_col],
-                on=distance_columns,
-            )
-            .with_columns(
-                pl.col("variable")
-                .str.replace("euclidean_distance_", "")
-                .alias("dist_label")
-            )
-            .filter(pl.col(decode_col) == pl.col("dist_label"))
-            .rename({"value": out_col})
-        )
-
-        return errors_df.join(
-            distances["individual", "start_position", decode_col, out_col],
-            on=["individual", "start_position", decode_col],
-            how="left",
-        )
-
-    errors_df = add_distance(
-        errors_df,
-        decode_col="label_decoded",
-        out_col="label_distance",
-    )
-    errors_df = add_distance(
-        errors_df,
-        decode_col="pred_decoded",
-        out_col="pred_label_distance",
-    )
-    return errors_df
+def process_file_group_centroids(
+    npy_file_path: Path, group_map: dict[str, str]
+) -> tuple[np.ndarray, int, str]:
+    embedding = np.load(npy_file_path)
+    individual = npy_file_path.stem
+    group = group_map[individual]
+    return np.sum(embedding, axis=0), embedding.shape[0], group
 
 
 class OnDiskPredictionResults:
@@ -120,8 +92,10 @@ class OnDiskPredictionResults:
         self.npy_without_reference = list(
             filter(lambda x: not x.stem.endswith("reference"), self.npy_files_paths)
         )
-        self.metadata = pd.read_csv(str(base_dir / "metadata.csv"), index_col=0)
-        self.individual_to_label = self.metadata["label"].to_dict()
+        # Utilise la classe Metadata pour charger les métadonnées
+        self.metadata = build_metadata(
+            metadata_file_path=self.base_dir / "metadata.csv",
+        )
         self.embeddings_dim = np.load(self.npy_files_paths[0]).shape[1]
 
         # Create cache directory
@@ -167,70 +141,70 @@ class OnDiskPredictionResults:
         with open(cache_path, "wb") as f:
             pickle.dump(data, f)
 
-    def compute_centroids(self) -> dict[str, np.ndarray]:
-        # Try to load from cache first
-        cached_centroids = self._load_from_cache("centroids")
-        if cached_centroids is not None:
-            return cached_centroids
+    def _compute_centroids_by_group(
+        self, group_type: str, cache_name: str
+    ) -> dict[str, np.ndarray]:
+        cached = self._load_from_cache(cache_name)
+        if cached is not None:
+            return cached
 
-        logger.info("Computing centroids...")
-        lables_set = set(self.metadata["label"].unique())
-        centroids = {label: np.zeros(self.embeddings_dim) for label in lables_set}
-        counts = {label: 0 for label in lables_set}
+        logger.info(f"Computing {group_type} centroids...")
+        if group_type == "label":
+            group_map = self.metadata.metadata_df["label"].to_dict()
+            groups_set = set(self.metadata.label_to_id.keys())
+        elif group_type == "family":
+            group_map = self.metadata.metadata_df["family"].to_dict()
+            groups_set = set(self.metadata.family_to_id.keys())
+        else:
+            raise ValueError(f"Unknown group_type: {group_type}")
+
+        centroids = {group: np.zeros(self.embeddings_dim) for group in groups_set}
+        counts = {group: 0 for group in groups_set}
+
+        partial_process_file = partial(
+            process_file_group_centroids, group_map=group_map
+        )
 
         with ProcessPoolExecutor(max_workers=self.workers) as executor:
-
-            partial_process_file_centroids = partial(
-                process_file_centroids,
-                individual_to_label=self.individual_to_label,
-            )
-
-            for result in tqdm(
-                executor.map(
-                    partial_process_file_centroids, self.npy_without_reference
-                ),
+            for embedding_sum, count, group in tqdm(
+                executor.map(partial_process_file, self.npy_without_reference),
                 total=len(self.npy_without_reference),
-                desc="Computing centroids",
+                desc=f"Computing {group_type} centroids",
                 unit="file",
             ):
-                embedding_sum, count, label = result
-                centroids[label] += embedding_sum
-                counts[label] += count
+                centroids[group] += embedding_sum
+                counts[group] += count
 
         final_centroids = {
-            label: centroids[label] / counts[label] for label in centroids
+            group: centroids[group] / counts[group]
+            for group in centroids
+            if counts[group] > 0
         }
-
-        # Save to cache
-        self._save_to_cache("centroids", final_centroids)
-
+        self._save_to_cache(cache_name, final_centroids)
         return final_centroids
 
-    def compute_distances(self) -> pd.DataFrame:
-        # Try to load from cache first
-        cached_distances = self._load_from_cache("distances")
-        if cached_distances is not None:
-            return cached_distances
+    def compute_centroids(self) -> dict[str, np.ndarray]:
+        return self._compute_centroids_by_group("label", "centroids")
 
-        logger.info("Computing distances...")
-        centroids = self.compute_centroids()
+    def compute_family_centroids(self) -> dict[str, np.ndarray]:
+        return self._compute_centroids_by_group("family", "family_centroids")
 
+    def _compute_distances_for_centroids(
+        self, centroids: dict[str, np.ndarray], prefix: str
+    ) -> pd.DataFrame:
         with ProcessPoolExecutor(max_workers=self.workers) as executor:
-
             partial_process_file_distances = partial(
                 process_file_distances,
                 centroids=centroids,
             )
-
             all_distances = []
             for result in tqdm(
                 executor.map(partial_process_file_distances, self.npy_files_paths),
                 total=len(self.npy_files_paths),
-                desc="Computing distances",
+                desc=f"Computing distances ({prefix.rstrip('_')})",
                 unit="file",
             ):
                 all_distances.append(result)
-
         distances_df = pd.concat(all_distances, ignore_index=True)
         pivot_df = distances_df.pivot_table(
             index=["individual"],
@@ -238,14 +212,26 @@ class OnDiskPredictionResults:
             values=["distance"],
         )
         pivot_df.columns = [
-            "euclidean_distance_" + str(col)
-            for col in pivot_df.columns.get_level_values(1)
+            f"{prefix}{col}" for col in pivot_df.columns.get_level_values(1)
         ]
-
-        # Save to cache
-        self._save_to_cache("distances", pivot_df)
-
         return pivot_df
+
+    def compute_distances(self) -> pd.DataFrame:
+        # Try to load from cache first
+        cached_distances = self._load_from_cache("distances")
+        if cached_distances is not None:
+            return cached_distances
+
+        logger.info("Computing distances (labels and families)...")
+        label_distances = self._compute_distances_for_centroids(
+            self.compute_centroids(), "euclidean_distance_"
+        )
+        family_distances = self._compute_distances_for_centroids(
+            self.compute_family_centroids(), "euclidean_family_distance_"
+        )
+        merged = pd.concat([label_distances, family_distances], axis=1)
+        self._save_to_cache("distances", merged)
+        return merged
 
     def compute_errors(self) -> pd.DataFrame:
         # Try to load from cache first
@@ -269,14 +255,15 @@ class OnDiskPredictionResults:
             all_errors.append(errors)
 
         errors_df = pl.concat(all_errors)
-        errors_df = add_distances_to_errors(errors_df)
 
         # Save to cache
         self._save_to_cache("errors", errors_df)
 
         return errors_df
 
-    def plot_tsne(self, sample_per_individual: int = 100) -> pl.DataFrame:
+    def plot_tsne(
+        self, sample_per_individual: int = 100, use_family_centroids: bool = False
+    ) -> None:
 
         rows = []
         for parquet_file_path in tqdm(self.parquet_files_paths):
@@ -287,7 +274,11 @@ class OnDiskPredictionResults:
 
         plot_tsne(
             res_df=concat.to_pandas(),
-            centroids=self.compute_centroids(),
+            centroids=(
+                self.compute_family_centroids()
+                if use_family_centroids
+                else self.compute_centroids()
+            ),
             output_dir=None,
             perplexity=30,
             n_iter=300,
@@ -312,4 +303,4 @@ class OnDiskPredictionResults:
     def plot_error_dist_2d_hist(self):
         errors = self.compute_errors()
 
-        plot_2d_hist(errors)
+        plot_2d_histogram(errors)

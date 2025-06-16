@@ -29,7 +29,7 @@ def load_datasets(
 ) -> tuple["DNADataset", Optional["DNADataset"]]:
 
     metadata = build_metadata(
-        path_helper=path_helper,
+        path_helper=path_helper.metadata_file_path,
         labels_to_remove=labels_to_remove,
         data_ratio_to_use=data_ratio_to_use,
         individuals_to_ignore=individuals_to_ignore,
