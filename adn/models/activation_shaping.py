@@ -17,6 +17,9 @@ class ActivationShapingS(torch.nn.Module):
         Returns:
             torch.Tensor: output tensor of the same shape as inputs
         """
+        if self.pruning_level <= 0:
+            return inputs
+
         batch_size, seq_len, hidden_size = inputs.shape
         fattened = inputs.reshape((batch_size, -1))
         sum_1 = torch.sum(fattened, dim=1)

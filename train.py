@@ -108,9 +108,7 @@ class Train(CommonArgs):
         if self.checkpoint_dir:
             logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
             return self.load_config_and_model(
-                config_kwarks={
-                    "activation_shaping_pruning_level": self.activation_shaping_pruning_level,
-                }
+                activation_shaping_pruning_level=self.activation_shaping_pruning_level,
             )
         else:
             logger.info(
@@ -123,8 +121,8 @@ class Train(CommonArgs):
             output_dir = Path(self.output_dir) / self.run_name
             # assert not output_dir.exists(), f"Output directory {output_dir} already exists."
             output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / "args_config.json", "w") as f:
-                json.dump(self.model_dump(), f, indent=4)
+            # with open(output_dir / "args_config.json", "w") as f:
+            #    json.dump(self.model_dump(), f, indent=4)
 
             tokenizer = get_tokenizer(self.tokenizer_path)
             tokenizer.save_pretrained(output_dir)

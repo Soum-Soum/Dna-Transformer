@@ -22,8 +22,7 @@ class DnaModernBertConfig(ModernBertConfig):
         self,
         max_position: int = None,
         snp_count: int = None,
-        activation_shaping: bool = False,
-        activation_shaping_pruning_level: float = 0.5,
+        activation_shaping_pruning_level: float = 0.0,
         class_weights: Optional[list[float]] = None,
         num_families: int = None,
         family_class_weights: Optional[list[float]] = None,
@@ -32,7 +31,6 @@ class DnaModernBertConfig(ModernBertConfig):
         super().__init__(**kwargs)
         self.max_position = max_position
         self.snp_count = snp_count
-        self.activation_shaping = activation_shaping
         self.activation_shaping_pruning_level = activation_shaping_pruning_level
         self.class_weights = class_weights
         self.num_families = num_families
@@ -43,7 +41,6 @@ class DnaModernBertConfig(ModernBertConfig):
         cls,
         ds: DNADataset,
         tokenizer: PreTrainedTokenizerFast,
-        activation_shaping: bool,
         activation_shaping_pruning_level: float,
         **kwargs,
     ) -> Self:
@@ -56,7 +53,6 @@ class DnaModernBertConfig(ModernBertConfig):
             family_class_weights=ds.metadata.family_class_weights.tolist(),
             max_position=ds.max_position,
             snp_count=ds.snp_count,
-            activation_shaping=activation_shaping,
             activation_shaping_pruning_level=activation_shaping_pruning_level,
             **kwargs,
         )
@@ -128,21 +124,17 @@ class ActivationShapingModernBertPredictionHead(ModernBertPredictionHead):
 
     def __init__(self, config: DnaModernBertConfig):
         super().__init__(config)
-        if config.activation_shaping:
-            logger.info(
-                f"Using activation shaping with pruning level {config.activation_shaping_pruning_level}"
-            )
-            self.activation_shaping = ActivationShapingS(
-                pruning_level=config.activation_shaping_pruning_level
-            )
-        else:
-            self.activation_shaping = None
+        logger.info(
+            f"Using activation shaping with pruning level {config.activation_shaping_pruning_level}"
+        )
+        self.activation_shaping = ActivationShapingS(
+            pruning_level=config.activation_shaping_pruning_level
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        if self.activation_shaping is not None:
-            hidden_states = hidden_states.unsqueeze(1)
-            hidden_states = self.activation_shaping(hidden_states)
-            hidden_states = hidden_states.squeeze(1)
+        hidden_states = hidden_states.unsqueeze(1)
+        hidden_states = self.activation_shaping(hidden_states)
+        hidden_states = hidden_states.squeeze(1)
 
         return super().forward(hidden_states)
 

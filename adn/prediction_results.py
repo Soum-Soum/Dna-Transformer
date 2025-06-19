@@ -4,7 +4,6 @@ from pathlib import Path
 import pickle
 import hashlib
 import json
-from typing import Generator
 
 from loguru import logger
 import numpy as np
@@ -13,8 +12,7 @@ import polars as pl
 from tqdm import tqdm
 
 from adn.plots import plot_2d_histogram, plot_confusion_matrix, plot_tsne
-from adn.data.metadata import Metadata, build_metadata
-from adn.utils.paths_utils import PathHelper
+from adn.data.metadata import build_metadata
 
 
 def process_file_centroids(
@@ -78,6 +76,18 @@ def process_file_group_centroids(
     individual = npy_file_path.stem
     group = group_map[individual]
     return np.sum(embedding, axis=0), embedding.shape[0], group
+
+
+def add_distance_column(df, source_col, target_col, label_to_distance_col):
+    """Ajoute une colonne de distance basée sur le mapping des labels"""
+    condition = None
+    for label, col in label_to_distance_col.items():
+        if condition is None:
+            condition = pl.when(pl.col(source_col) == label).then(pl.col(col))
+        else:
+            condition = condition.when(pl.col(source_col) == label).then(pl.col(col))
+
+    return df.with_columns(condition.otherwise(None).alias(target_col))
 
 
 class OnDiskPredictionResults:
@@ -256,6 +266,16 @@ class OnDiskPredictionResults:
 
         errors_df = pl.concat(all_errors)
 
+        label_to_distance_col = {
+            x: f"euclidean_distance_{x}" for x in errors_df["label_decoded"].unique()
+        }
+        errors_df = add_distance_column(
+            errors_df, "label_decoded", "label_distance", label_to_distance_col
+        )
+        errors_df = add_distance_column(
+            errors_df, "pred_decoded", "pred_label_distance", label_to_distance_col
+        )
+
         # Save to cache
         self._save_to_cache("errors", errors_df)
 
@@ -292,11 +312,18 @@ class OnDiskPredictionResults:
             [
                 pl.col("label_decoded"),
                 pl.col("pred_decoded"),
+                pl.col("family_decoded"),
+                pl.col("pred_family_decoded"),
             ]
         ).collect()
         plot_confusion_matrix(
             y_true=preds["label_decoded"].to_pandas(),
             y_pred=preds["pred_decoded"].to_pandas(),
+            normalize="true",
+        )
+        plot_confusion_matrix(
+            y_true=preds["family_decoded"].to_pandas(),
+            y_pred=preds["pred_family_decoded"].to_pandas(),
             normalize="true",
         )
 

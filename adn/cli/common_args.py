@@ -58,6 +58,8 @@ class CommonArgs(BaseModel):
             ),
         }
 
+        
+
         model_type = config_json["model_type"]
         config_class, model_class = model_type_to_class[model_type]
         config = config_class.from_pretrained(

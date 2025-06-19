@@ -205,7 +205,7 @@ def plot_2d_histogram(df: pl.DataFrame):
 
     # Histogramme 2D classique
     heatmap, xedges, yedges = np.histogram2d(x, y, bins=[x_bins, y_bins])
-    log_heatmap = np.log1p(heatmap)
+    log_heatmap = np.log10(1 + heatmap)
 
     # Histogramme 2D pondéré (moyenne de l'énergie)
     # Pour chaque bin, somme des energy et nombre de points

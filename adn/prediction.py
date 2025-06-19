@@ -43,7 +43,7 @@ class Predictor:
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=partial(collate_fn, data_collator=self.data_collator),
-            num_workers=4,
+            num_workers=8,
         )
 
     def _results_to_df(self, results: list, ds: DNADataset) -> pd.DataFrame:
@@ -58,7 +58,6 @@ class Predictor:
                 "label",
             ],
         )
-        df.to_parquet("lol.parquet", index=False)
 
         # labels
         df["label_id"] = df["label"].apply(lambda x: x[0])
@@ -74,6 +73,9 @@ class Predictor:
         df["pred_prob"] = df.apply(lambda x: x["logits"][x["pred"]], axis=1)
         df["is_error"] = (df["pred"] != df["label_id"]).astype(int)
         df["pred_decoded"] = df["pred"].apply(lambda x: ds.metadata.id_to_label[x])
+        df["pred_family_decoded"] = df["pred_decoded"].apply(
+            lambda x: ds.metadata.label_to_family[x]
+        )
 
         df = df.drop(columns=["label"])
 
@@ -107,34 +109,36 @@ class Predictor:
     def _process_one_batch(
         self, batch: dict[str, torch.Tensor], batch_metadata: dict
     ) -> list:
-        batch = {k: v.cuda() for k, v in batch.items()}
 
-        embeddings_outputs, classifier_outputs = self.model.predict(**batch)
-        logits = (
-            torch.nn.functional.softmax(classifier_outputs.logits, dim=1)
-            .cpu()
-            .detach()
-            .numpy()
-        )
+        with torch.no_grad():
+            batch = {k: v.cuda() for k, v in batch.items()}
 
-        ennergy_scores = (
-            compute_ennergy_score(classifier_outputs.logits).cpu().detach().numpy()
-        )
-
-        embeddings = embeddings_outputs.pooler_output.cpu().detach().numpy()
-
-        results = list(
-            zip(
-                logits,
-                ennergy_scores,
-                embeddings,
-                batch_metadata["individual"],
-                batch_metadata["interval"],
-                batch["labels"].cpu().detach().numpy(),
+            embeddings_outputs, classifier_outputs = self.model.predict(**batch)
+            logits = (
+                torch.nn.functional.softmax(classifier_outputs.logits, dim=1)
+                .cpu()
+                .detach()
+                .numpy()
             )
-        )
 
-        return results
+            ennergy_scores = (
+                compute_ennergy_score(classifier_outputs.logits).cpu().detach().numpy()
+            )
+
+            embeddings = embeddings_outputs.pooler_output.cpu().detach().numpy()
+
+            results = list(
+                zip(
+                    logits,
+                    ennergy_scores,
+                    embeddings,
+                    batch_metadata["individual"],
+                    batch_metadata["interval"],
+                    batch["labels"].cpu().detach().numpy(),
+                )
+            )
+
+            return results
 
     def _save_metadata(self, dataset: DNADataset) -> None:
         metadata_df = dataset.metadata.metadata_df.copy()
