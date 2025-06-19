@@ -9,6 +9,7 @@ from loguru import logger
 import numpy as np
 import pandas as pd
 import polars as pl
+from sklearn.metrics import classification_report
 from tqdm import tqdm
 
 from adn.plots import plot_2d_histogram, plot_confusion_matrix, plot_tsne
@@ -325,6 +326,22 @@ class OnDiskPredictionResults:
             y_true=preds["family_decoded"].to_pandas(),
             y_pred=preds["pred_family_decoded"].to_pandas(),
             normalize="true",
+        )
+
+        print(
+            classification_report(
+                y_true=preds["label_decoded"].to_pandas(),
+                y_pred=preds["pred_decoded"].to_pandas(),
+                zero_division=0,
+            )
+        )
+
+        print(
+            classification_report(
+                y_true=preds["family_decoded"].to_pandas(),
+                y_pred=preds["pred_family_decoded"].to_pandas(),
+                zero_division=0,
+            )
         )
 
     def plot_error_dist_2d_hist(self):

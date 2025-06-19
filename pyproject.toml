@@ -24,6 +24,7 @@ dependencies = [
     "tensorboardx>=2.6.2.2",
     "standard-imghdr>=3.13.0",
     "seaborn>=0.13.2",
+    "plotly>=6.1.2",
 ]
 
 [tool.uv.sources]
