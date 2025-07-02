@@ -162,6 +162,7 @@ class Train(CommonArgs):
                 dataloader_num_workers=8,
                 fp16=True,
                 optim="adamw_torch_fused",
+                weight_decay=1e-4,
                 remove_unused_columns=False,
                 report_to=["tensorboard"],
             )

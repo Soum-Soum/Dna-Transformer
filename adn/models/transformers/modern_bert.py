@@ -139,29 +139,74 @@ class ActivationShapingModernBertPredictionHead(ModernBertPredictionHead):
         return super().forward(hidden_states)
 
 
+from pytorch_metric_learning import losses
+from pytorch_metric_learning.reducers import ClassWeightedReducer, MeanReducer
+
+
 class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification):
 
     def __init__(self, config: DnaModernBertConfig):
         super().__init__(config)
         # self.model.embeddings = DnaModernBertEmbeddings(config)
         self.model.embeddings = DnaModernBertEmbeddingsV2(config)
-        self.family_classifier = nn.Linear(config.hidden_size, config.num_families)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels, bias=False)
+        self.family_classifier = nn.Linear(
+            config.hidden_size, config.num_families, bias=False
+        )
+        self.use_cross_entropy_loss = False
 
-        if config.class_weights is not None:
-            self.logits_loss_fct = nn.CrossEntropyLoss(
-                weight=torch.tensor(config.class_weights, dtype=torch.float32)
-            )
-        else:
-            self.logits_loss_fct = nn.CrossEntropyLoss()
-
-        if config.family_class_weights is not None:
-            self.family_loss_fct = nn.CrossEntropyLoss(
-                weight=torch.tensor(config.family_class_weights, dtype=torch.float32)
-            )
-        else:
-            self.family_loss_fct = nn.CrossEntropyLoss()
+        self.logits_loss_fct, self.family_loss_fct = self.get_losses_fcts(config)
 
         self.head = ActivationShapingModernBertPredictionHead(config)
+
+    def get_losses_fcts(
+        self, config: DnaModernBertConfig
+    ) -> tuple[nn.Module, nn.Module]:
+        if self.use_cross_entropy_loss:
+            if config.class_weights is not None:
+                logits_loss_fct = nn.CrossEntropyLoss(
+                    weight=torch.tensor(config.class_weights, dtype=torch.float32)
+                )
+            else:
+                logits_loss_fct = nn.CrossEntropyLoss()
+
+            if config.family_class_weights is not None:
+                family_loss_fct = nn.CrossEntropyLoss(
+                    weight=torch.tensor(
+                        config.family_class_weights, dtype=torch.float32
+                    )
+                )
+            else:
+                family_loss_fct = nn.CrossEntropyLoss()
+        else:
+            if config.class_weights is not None:
+                reducer = ClassWeightedReducer(
+                    weights=torch.tensor(config.class_weights, dtype=torch.float32)
+                )
+            else:
+                reducer = MeanReducer()
+
+            logits_loss_fct = losses.NormalizedSoftmaxLoss(
+                num_classes=config.num_labels,
+                embedding_size=config.hidden_size,
+                reducer=reducer,
+            )
+
+            if config.family_class_weights is not None:
+                family_reducer = ClassWeightedReducer(
+                    weights=torch.tensor(
+                        config.family_class_weights, dtype=torch.float32
+                    )
+                )
+            else:
+                family_reducer = MeanReducer()
+
+            family_loss_fct = losses.NormalizedSoftmaxLoss(
+                num_classes=config.num_families,
+                embedding_size=config.hidden_size,
+                reducer=family_reducer,
+            )
+        return logits_loss_fct, family_loss_fct
 
     def _embeddings(self, **kwargs) -> BaseModelOutputWithPooling:
         base_model_prediction: BaseModelOutput = self.model(
@@ -196,11 +241,24 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
 
             labels_ids, family_ids = torch.split(labels, 1, dim=1)
 
-            loss = self.logits_loss_fct(
-                label_logits.view(-1, label_logits.shape[-1]), labels_ids.view(-1)
-            ) + self.family_loss_fct(
-                family_logits.view(-1, family_logits.shape[-1]), family_ids.view(-1)
-            )
+            if self.use_cross_entropy_loss:
+                logits_loss = self.logits_loss_fct(
+                    label_logits.view(-1, label_logits.shape[-1]),
+                    labels_ids.view(-1),
+                )
+                family_loss = self.family_loss_fct(
+                    family_logits.view(-1, family_logits.shape[-1]),
+                    family_ids.view(-1),
+                )
+                loss = logits_loss + family_loss
+            else:
+                logits_loss = self.logits_loss_fct(
+                    embeddings=outputs.pooler_output, labels=labels_ids.view(-1)
+                )
+                family_loss = self.family_loss_fct(
+                    embeddings=outputs.pooler_output, labels=family_ids.view(-1)
+                )
+                loss = logits_loss + family_loss
         else:
             loss = None
 

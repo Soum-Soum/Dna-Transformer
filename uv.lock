@@ -458,6 +458,7 @@ dependencies = [
     { name = "polars" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "pytorch-metric-learning" },
     { name = "scikit-learn" },
     { name = "seaborn" },
     { name = "standard-imghdr" },
@@ -490,6 +491,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.29.0" },
     { name = "pyarrow", specifier = ">=20.0.0" },
     { name = "pydantic", specifier = ">=2.11.4" },
+    { name = "pytorch-metric-learning", specifier = ">=2.8.1" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "standard-imghdr", specifier = ">=3.13.0" },
@@ -1970,6 +1972,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9e/de/d3144a0bceede957f961e975f3752760fbe390d57fbe194baf709d8f1f7b/python_json_logger-3.3.0.tar.gz", hash = "sha256:12b7e74b17775e7d565129296105bbe3910842d9d0eb083fc83a6a617aa8df84", size = 16642, upload-time = "2025-03-07T07:08:27.301Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/08/20/0f2523b9e50a8052bc6a8b732dfc8568abbdc42010aef03a2d750bdab3b2/python_json_logger-3.3.0-py3-none-any.whl", hash = "sha256:dd980fae8cffb24c13caf6e158d3d61c0d6d22342f932cb6e9deedab3d35eec7", size = 15163, upload-time = "2025-03-07T07:08:25.627Z" },
+]
+
+[[package]]
+name = "pytorch-metric-learning"
+version = "2.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "torch", version = "2.7.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+    { name = "torch", version = "2.7.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/94/1bfb2c3eaf195b2d72912b65b3d417f2d9ac22491563eca360d453512c59/pytorch-metric-learning-2.8.1.tar.gz", hash = "sha256:fcc4d3b4a805e5fce25fb2e67505c47ba6fea0563fc09c5655ea1f08d1e8ed93", size = 83117, upload-time = "2024-12-11T19:21:15.982Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/60/15/eee4e24c3f5a63b3e73692ff79766a66cab8844e24f5912be29350937592/pytorch_metric_learning-2.8.1-py3-none-any.whl", hash = "sha256:aba6da0508d29ee9661a67fbfee911cdf62e65fc07e404b167d82871ca7e3e88", size = 125923, upload-time = "2024-12-11T19:21:13.448Z" },
 ]
 
 [[package]]
