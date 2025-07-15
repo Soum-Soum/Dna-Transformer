@@ -9,6 +9,7 @@ from loguru import logger
 import numpy as np
 import pandas as pd
 import polars as pl
+from sklearn.manifold import TSNE
 from sklearn.metrics import classification_report
 from tqdm import tqdm
 
@@ -286,24 +287,54 @@ class OnDiskPredictionResults:
         self, sample_per_individual: int = 100, use_family_centroids: bool = False
     ) -> None:
 
-        rows = []
-        for parquet_file_path in tqdm(self.parquet_files_paths):
-            df = load_prediction_with_embeddings(parquet_file_path)
-            rows.append(df.sample(sample_per_individual))
+        cached_data = self._load_from_cache(
+            f"tsne_{sample_per_individual}_{use_family_centroids}"
+        )
+        if cached_data is None:
+            rows = []
+            for parquet_file_path in tqdm(self.parquet_files_paths):
+                df = load_prediction_with_embeddings(parquet_file_path)
+                rows.append(df.sample(sample_per_individual))
 
-        concat = pl.concat(rows)
+            concat = pl.concat(rows)
 
-        plot_tsne(
-            res_df=concat.to_pandas(),
-            centroids=(
+            # Extract data
+            embeddings = np.stack(concat["embedding"].to_numpy())
+
+            centroids = (
                 self.compute_family_centroids()
                 if use_family_centroids
                 else self.compute_centroids()
-            ),
-            output_dir=None,
-            perplexity=30,
-            n_iter=300,
-            random_state=42,
+            )
+            
+            embeddings = np.concatenate(
+                [embeddings, np.stack(list(centroids.values()))]
+            )
+
+            tsne = TSNE(
+                n_components=2,
+                perplexity=30,
+                n_iter=300,
+                random_state=42,
+                verbose=1,
+                n_jobs=-1,
+            )
+            tsne_results = tsne.fit_transform(embeddings)
+            tsne_results, centroids_tsne = (
+                tsne_results[: -len(centroids)],
+                tsne_results[-len(centroids) :],
+            )
+            self._save_to_cache(
+                f"tsne_{sample_per_individual}_{use_family_centroids}",
+                (concat, tsne_results, centroids_tsne),
+            )
+        else:
+            concat, tsne_results, centroids_tsne = cached_data
+
+        plot_tsne(
+            res_df=concat.to_pandas(),
+            tsne_results=tsne_results,
+            centroids_tsne=centroids_tsne,
         )
 
     def plot_confusion_matrix(self):

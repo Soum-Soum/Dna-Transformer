@@ -11,58 +11,27 @@ import seaborn as sns
 
 def plot_tsne(
     res_df: pd.DataFrame,
-    centroids: dict[str, np.ndarray] = {},
+    tsne_results: np.ndarray,
+    centroids_tsne: np.ndarray,
     output_dir: Path = None,
-    perplexity=30,
-    n_iter=300,
-    random_state=42,
 ):
-    required_columns = {"embedding", "label_decoded", "start_position"}
-    missing_columns = required_columns - set(res_df.columns)
 
-    if missing_columns:
-        raise ValueError(f"Missing required columns in dataframe: {missing_columns}")
-
-    # Extract data
-    embeddings = np.stack(res_df["embedding"].values)
     labels, label_classes = pd.factorize(res_df["label_decoded"])
-    positions = res_df["start_position"].values  # Numeric positions
+    family_labels, family_classes = pd.factorize(res_df["family_decoded"])
+    positions = res_df["start_position"].values
+    ennergy_scores = res_df["ennergy_scores"].values
 
-    assert (
-        embeddings.ndim == 2
-    ), f"Expected embeddings to be a 2D array, got shape {embeddings.shape}"
-
-    if len(centroids) != 0:
-        # assert len(centroids) == len(
-        #     label_classes
-        # ), f"Centroids length {len(centroids)} does not match label classes length {len(label_classes)}"
-        embeddings = np.concatenate([embeddings, np.stack(list(centroids.values()))])
-
-    tsne = TSNE(
-        n_components=2,
-        perplexity=perplexity,
-        n_iter=n_iter,
-        random_state=random_state,
-        verbose=1,
-        n_jobs=-1,
-    )
-    tsne_results = tsne.fit_transform(embeddings)
-    if len(centroids) != 0:
-        tsne_results, centroids_tsne = (
-            tsne_results[: -len(centroids)],
-            tsne_results[-len(centroids) :],
-        )
-    else:
-        centroids_tsne = None
-
-    fig, axes = plt.subplots(1, 2, figsize=(25, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(40, 30))
 
     plots_info = [
         ("Labels", labels, label_classes, "Accent"),
+        ("Family", family_labels, family_classes, "Accent"),
         ("Position", positions, None, "plasma"),
+        ("Energy Score", ennergy_scores, None, "viridis"),
     ]
 
-    for ax, (title, values, classes, cmap) in zip(axes, plots_info):
+    for ax, (title, values, classes, cmap) in zip(axes.flat, plots_info):
+        print(f"{title}: values={values.shape}, tsne={tsne_results.shape}")
         scatter = ax.scatter(
             tsne_results[:, 0], tsne_results[:, 1], c=values, cmap=cmap, alpha=0.6
         )

@@ -234,14 +234,14 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
         self, outputs: BaseModelOutputWithPooling, labels=None
     ) -> SequenceClassifierOutput:
 
-        label_logits = self.classifier(outputs.pooler_output)
-        family_logits = self.family_classifier(outputs.pooler_output)
+        loss = None
+        if self.use_cross_entropy_loss:
+            label_logits = self.classifier(outputs.pooler_output)
+            family_logits = self.family_classifier(outputs.pooler_output)
 
-        if labels is not None:
+            if labels is not None:
+                labels_ids, family_ids = torch.split(labels, 1, dim=1)
 
-            labels_ids, family_ids = torch.split(labels, 1, dim=1)
-
-            if self.use_cross_entropy_loss:
                 logits_loss = self.logits_loss_fct(
                     label_logits.view(-1, label_logits.shape[-1]),
                     labels_ids.view(-1),
@@ -251,7 +251,18 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
                     family_ids.view(-1),
                 )
                 loss = logits_loss + family_loss
-            else:
+
+        else:
+            label_logits = self.logits_loss_fct.get_logits(
+                embeddings=outputs.pooler_output
+            )
+            family_logits = self.family_loss_fct.get_logits(
+                embeddings=outputs.pooler_output
+            )
+
+            if labels is not None:
+                labels_ids, family_ids = torch.split(labels, 1, dim=1)
+
                 logits_loss = self.logits_loss_fct(
                     embeddings=outputs.pooler_output, labels=labels_ids.view(-1)
                 )
@@ -259,8 +270,6 @@ class DnaModernBertForSequenceClassification(ModernBertForSequenceClassification
                     embeddings=outputs.pooler_output, labels=family_ids.view(-1)
                 )
                 loss = logits_loss + family_loss
-        else:
-            loss = None
 
         return SequenceClassifierOutput(
             loss=loss,
